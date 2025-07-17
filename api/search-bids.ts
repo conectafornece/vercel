@@ -1,46 +1,80 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-const PNCP_BASE_URL = "https://pncp.gov.br/api";
+const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta";
+
+// Mapeamento de modalidades para os códigos da API PNCP
+const modalityMapping: { [key: string]: string } = {
+  pregao: '5',
+  concorrencia: '6',
+  concurso: '7',
+  leilao: '8',
+  dialogo_competitivo: '9',
+};
+
+// Mapeia os dados da API para o formato que o seu componente espera
+const mapBidData = (pncpBid: any) => ({
+  id_unico: pncpBid.numeroCompra,
+  titulo: pncpBid.objetoCompra,
+  orgao: pncpBid.orgaoEntidade?.nome || 'Não informado',
+  modalidade: pncpBid.modalidadeLicitacao?.nome || 'Não informada',
+  data_publicacao: pncpBid.dataPublicacaoPncp,
+  link_oficial: `https://pncp.gov.br/app/compras/${pncpBid.numeroCompra}`,
+  status: pncpBid.situacaoCompra?.nome || 'Não informado',
+  fonte: 'PNCP',
+});
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Headers CORS para permitir a comunicação com seu app
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   try {
-    const { keyword, modality, uf, city } = req.query;
+    const { keyword, modality, uf, city, page = '1' } = req.query;
 
     const params = new URLSearchParams();
+    params.append('pagina', Array.isArray(page) ? page[0] : page);
+    params.append('tamanhoPagina', '10'); // Buscando 10 itens por página
 
     if (keyword && typeof keyword === 'string') {
       params.append('palavraChave', keyword);
     }
-    if (modality && typeof modality === 'string' && modality !== 'all') {
-      params.append('modalidade', modality);
+    if (modality && typeof modality === 'string' && modality !== 'all' && modalityMapping[modality]) {
+      params.append('codigoModalidadeLicitacao', modalityMapping[modality]);
     }
     if (uf && typeof uf === 'string' && uf !== 'all') {
-      params.append('codigoUF', uf);
+      params.append('codigoUf', uf);
     }
     if (city && typeof city === 'string' && city !== 'all') {
       params.append('codigoMunicipio', city);
     }
 
-    const url = `${PNCP_BASE_URL}/v1/licitacoes?${params.toString()}`;
-
+    const url = `${PNCP_BASE_URL}/v1/compras?${params.toString()}`;
+    
     const response = await fetch(url);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`Erro na API PNCP: ${errorText}`);
-      return res.status(response.status).json({ 
-        error: `Erro ao consultar a API externa.`, 
-        details: errorText 
-      });
+      console.error(`Erro na API PNCP: ${response.status} - ${url}`, errorText);
+      return res.status(response.status).json({ error: `Erro na API PNCP: ${errorText}` });
     }
 
-    const data = await response.json();
+    const rawData = await response.json();
     
-    return res.status(200).json(data);
+    const mappedData = (rawData.data || []).map(mapBidData);
+
+    return res.status(200).json({
+        data: mappedData,
+        total: rawData.total,
+        totalPages: Math.ceil(rawData.total / parseInt(params.get('tamanhoPagina') || '10'))
+    });
 
   } catch (error: any) {
-    console.error(error);
-    const errorMessage = error instanceof Error ? error.message : 'Ocorreu um erro desconhecido.';
-    return res.status(500).json({ error: 'Erro interno no servidor.', details: errorMessage });
+    console.error("Erro interno na função serverless:", error);
+    return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
   }
 }
