@@ -16,7 +16,7 @@ const mapBidData = (pncpBid: any) => ({
   id_unico: pncpBid.numeroCompra,
   titulo: pncpBid.objetoCompra,
   orgao: pncpBid.orgaoEntidade?.nome || 'Não informado',
-  modalidade: pncpBid.modalidadeLicitacao?.nome || 'Não informada',
+  modalidade: pncpBid.modalidadeContratacao?.nome || 'Não informada',
   data_publicacao: pncpBid.dataPublicacaoPncp,
   link_oficial: `https://pncp.gov.br/app/compras/${pncpBid.numeroCompra}`,
   status: pncpBid.situacaoCompra?.nome || 'Não informado',
@@ -54,7 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       params.append('palavraChave', keyword);
     }
     if (modality && typeof modality === 'string' && modality !== 'all' && modalityMapping[modality]) {
-      params.append('codigoModalidadeLicitacao', modalityMapping[modality]);
+      params.append('codigoModalidadeContratacao', modalityMapping[modality]);
     }
     if (uf && typeof uf === 'string' && uf !== 'all') {
       params.append('codigoUf', uf);
@@ -63,11 +63,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       params.append('codigoMunicipio', city);
     }
 
-    const url = `${PNCP_BASE_URL}/v1/compras?${params.toString()}`;
+    // monta a URL correta pra /contratacoes
+    const url = `${PNCP_BASE_URL}/v1/contratacoes?${params.toString()}`;
     
     const response = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
       }
     });
 
@@ -78,13 +79,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const rawData = await response.json();
-    
     const mappedData = (rawData.data || []).map(mapBidData);
 
     return res.status(200).json({
-        data: mappedData,
-        total: rawData.total,
-        totalPages: Math.ceil(rawData.total / parseInt(params.get('tamanhoPagina') || '10'))
+      data: mappedData,
+      total: rawData.total,
+      totalPages: Math.ceil(rawData.total / Number(params.get('tamanhoPagina')))
     });
 
   } catch (error: any) {
