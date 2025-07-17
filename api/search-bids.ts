@@ -1,8 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta";
+// Endpoint correto para propostas abertas
+const PNCP_BASE_URL = "https://pncp.gov.br/pncp-consulta/v1/contratacoes/proposta";
 
-// Mapeamento de modalidades para os códigos da API PNCP
+// Mapeamento de modalidades para os códigos da API PNCP (contratação)
 const modalityMapping: { [key: string]: string } = {
   pregao: '5',
   concorrencia: '6',
@@ -15,13 +16,21 @@ const modalityMapping: { [key: string]: string } = {
 const mapBidData = (pncpBid: any) => ({
   id_unico: pncpBid.numeroCompra,
   titulo: pncpBid.objetoCompra,
-  orgao: pncpBid.orgaoEntidade?.nome || 'Não informado',
+  orgao: pncpBid.orgaoEntidade?.razaoSocial || pncpBid.orgaoEntidade?.nome || 'Não informado',
   modalidade: pncpBid.modalidadeContratacao?.nome || 'Não informada',
   data_publicacao: pncpBid.dataPublicacaoPncp,
-  link_oficial: `https://pncp.gov.br/app/compras/${pncpBid.numeroCompra}`,
+  link_oficial: `https://pncp.gov.br/app/contratacoes/${pncpBid.numeroCompra}`,
   status: pncpBid.situacaoCompra?.nome || 'Não informado',
   fonte: 'PNCP',
 });
+
+function getTodayYYYYMMDD() {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}${mm}${dd}`;
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Headers CORS para permitir a comunicação com seu app
@@ -50,6 +59,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     params.append('pagina', Array.isArray(page) ? page[0] : page);
     params.append('tamanhoPagina', '10');
 
+    // Filtro obrigatório para propostas abertas
+    params.append('dataFinal', getTodayYYYYMMDD());
+
     if (keyword && typeof keyword === 'string') {
       params.append('palavraChave', keyword);
     }
@@ -63,12 +75,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       params.append('codigoMunicipio', city);
     }
 
-    // monta a URL correta pra /contratacoes
-    const url = `${PNCP_BASE_URL}/v1/contratacoes?${params.toString()}`;
+    const url = `${PNCP_BASE_URL}?${params.toString()}`;
     
     const response = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
       }
     });
 
@@ -79,12 +90,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const rawData = await response.json();
+    
     const mappedData = (rawData.data || []).map(mapBidData);
 
     return res.status(200).json({
-      data: mappedData,
-      total: rawData.total,
-      totalPages: Math.ceil(rawData.total / Number(params.get('tamanhoPagina')))
+        data: mappedData,
+        total: rawData.totalRegistros || rawData.total || 0,
+        totalPages: rawData.totalPaginas || Math.ceil((rawData.totalRegistros || 0) / 10)
     });
 
   } catch (error: any) {
