@@ -19,7 +19,6 @@ const mapBidData = (pncpBid: any) => ({
   orgao: pncpBid.orgaoEntidade?.razaoSocial || pncpBid.orgaoEntidade?.nome || 'Não informado',
   modalidade: pncpBid.modalidadeContratacao?.nome || 'Não informada',
   data_publicacao: pncpBid.dataPublicacaoPncp,
-  // Corrigido: usar idCompra para o link
   link_oficial: pncpBid.idCompra
     ? `https://pncp.gov.br/app/contratacoes/${pncpBid.idCompra}/detalhe`
     : '',
@@ -62,8 +61,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     params.append('pagina', Array.isArray(page) ? page[0] : page);
     params.append('tamanhoPagina', '10');
 
-    // Filtro obrigatório para propostas abertas
-    params.append('dataFinal', getTodayYYYYMMDD());
+    // Filtro obrigatório para propostas abertas HOJE
+    const today = getTodayYYYYMMDD();
+    params.append('dataInicial', today);
+    params.append('dataFinal', today);
 
     if (keyword && typeof keyword === 'string') {
       params.append('palavraChave', keyword);
