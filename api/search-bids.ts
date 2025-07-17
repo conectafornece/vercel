@@ -38,7 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const params = new URLSearchParams();
     params.append('pagina', Array.isArray(page) ? page[0] : page);
-    params.append('tamanhoPagina', '10'); // Buscando 10 itens por página
+    params.append('tamanhoPagina', '10');
 
     if (keyword && typeof keyword === 'string') {
       params.append('palavraChave', keyword);
@@ -55,7 +55,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const url = `${PNCP_BASE_URL}/v1/compras?${params.toString()}`;
     
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
+    });
 
     if (!response.ok) {
       const errorText = await response.text();
