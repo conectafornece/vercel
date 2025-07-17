@@ -34,6 +34,15 @@ function getTodayYYYYMMDD() {
   return `${yyyy}${mm}${dd}`;
 }
 
+function getNDaysAgoYYYYMMDD(days: number) {
+  const now = new Date();
+  now.setDate(now.getDate() - days);
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}${mm}${dd}`;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Headers CORS para permitir a comunicação com seu app
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -61,9 +70,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     params.append('pagina', Array.isArray(page) ? page[0] : page);
     params.append('tamanhoPagina', '10');
 
-    // Filtro obrigatório para propostas abertas HOJE
+    // Buscar dos últimos 30 dias até hoje
     const today = getTodayYYYYMMDD();
-    params.append('dataInicial', today);
+    const thirtyDaysAgo = getNDaysAgoYYYYMMDD(30);
+    params.append('dataInicial', thirtyDaysAgo);
     params.append('dataFinal', today);
 
     if (keyword && typeof keyword === 'string') {
