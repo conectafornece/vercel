@@ -4,11 +4,12 @@ const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
+    // Extrai os parâmetros da query. Garante que sejam strings.
     const { keyword, modality, uf, city } = req.query;
 
-    // Monta os parâmetros da URL para a API PNCP
     const params = new URLSearchParams();
 
+    // Monta os parâmetros da URL para a API PNCP
     if (keyword && typeof keyword === 'string') {
       params.append('palavraChave', keyword);
     }
@@ -16,7 +17,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       params.append('modalidade', modality);
     }
     if (uf && typeof uf === 'string' && uf !== 'all') {
-      params.append('codigoUf', uf);
+      params.append('codigoUF', uf);
     }
     if (city && typeof city === 'string' && city !== 'all') {
       params.append('codigoMunicipio', city);
@@ -27,14 +28,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const response = await fetch(url);
 
     if (!response.ok) {
+      // Se a resposta da API externa não for bem-sucedida, capture o texto do erro
       const errorText = await response.text();
-      return res.status(response.status).json({ error: `Erro na API PNCP: ${errorText}` });
+      console.error(`Erro na API PNCP: ${errorText}`);
+      return res.status(response.status).json({ 
+        error: `Erro ao consultar a API externa.`, 
+        details: errorText 
+      });
     }
 
     const data = await response.json();
-
+    
     return res.status(200).json(data);
+
   } catch (error: any) {
-    return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
+    // Captura qualquer outro erro inesperado no servidor
+    console.error(error);
+    const errorMessage = error instanceof Error ? error.message : 'Ocorreu um erro desconhecido.';
+    return res.status(500).json({ error: 'Erro interno no servidor.', details: errorMessage });
+  }
+}
   }
 }
