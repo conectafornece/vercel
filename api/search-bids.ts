@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta";
+const PNCP_BASE_URL = "https://pncp.gov.br/api";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
