@@ -36,6 +36,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { keyword, modality, uf, city, page = '1' } = req.query;
 
+    // Só faz a requisição se pelo menos um filtro for preenchido
+    if (
+      (!keyword || keyword === '') &&
+      (!modality || modality === 'all') &&
+      (!uf || uf === 'all') &&
+      (!city || city === 'all')
+    ) {
+      return res.status(400).json({ error: 'Pelo menos um filtro deve ser preenchido para buscar licitações.' });
+    }
+
     const params = new URLSearchParams();
     params.append('pagina', Array.isArray(page) ? page[0] : page);
     params.append('tamanhoPagina', '10');
