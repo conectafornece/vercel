@@ -19,7 +19,10 @@ const mapBidData = (pncpBid: any) => ({
   orgao: pncpBid.orgaoEntidade?.razaoSocial || pncpBid.orgaoEntidade?.nome || 'Não informado',
   modalidade: pncpBid.modalidadeContratacao?.nome || 'Não informada',
   data_publicacao: pncpBid.dataPublicacaoPncp,
-  link_oficial: `https://pncp.gov.br/app/contratacoes/${pncpBid.numeroCompra}`,
+  // Corrigido: usar idCompra para o link
+  link_oficial: pncpBid.idCompra
+    ? `https://pncp.gov.br/app/contratacoes/${pncpBid.idCompra}/detalhe`
+    : '',
   status: pncpBid.situacaoCompra?.nome || 'Não informado',
   fonte: 'PNCP',
 });
