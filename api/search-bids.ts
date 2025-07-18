@@ -74,7 +74,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Para evitar conflito na API do PNCP, damos prioridade ao filtro mais específico.
     if (isCityValid) {
         // Se uma cidade válida for fornecida, usamos APENAS o filtro de cidade.
-        params.append('codigoMunicipiolbge', city as string);
+        params.append('codigoMunicipioIbge', city as string);
     } else if (uf && typeof uf === 'string' && uf !== 'all') {
         // Se não houver cidade, usamos o filtro de estado.
         params.append('uf', uf.toUpperCase().trim());
