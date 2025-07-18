@@ -89,14 +89,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     });
     
-    // ===================================================================
-    // INÍCIO DA ALTERAÇÃO - FILTRO DE KEYWORD AGORA É IRRESTRITO
-    // ===================================================================
+    // O filtro de palavra-chave é aplicado aqui, nos dados que a API nos entregou.
     let filteredBids = allBids;
-    
-    // O filtro por palavra-chave agora é aplicado em TODOS os casos,
-    // seja a busca por cidade, estado ou nacional.
-    // ATENÇÃO: Isso pode causar TIMEOUT em buscas muito amplas (ex: estado de SP).
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
         const lowercasedKeyword = keyword.trim().toLowerCase();
         filteredBids = allBids.filter(bid =>
@@ -104,9 +98,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             (bid.orgaoEntidadeRazaoSocial && bid.orgaoEntidadeRazaoSocial.toLowerCase().includes(lowercasedKeyword))
         );
     }
-    // ===================================================================
-    // FIM DA ALTERAÇÃO
-    // ===================================================================
     
     filteredBids.sort((a, b) => new Date(b.dataPublicacaoPncp).getTime() - new Date(a.dataPublicacaoPncp).getTime());
 
