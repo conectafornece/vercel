@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// 1. VOLTAMOS PARA O ENDPOINT DE LICITAÇÕES, QUE SUPORTA OS FILTROS CORRETAMENTE
+// 1. O endpoint continua o de licitações, que suporta os filtros.
 const PNCP_BASE_URL = "https://pncp.gov.br/pncp-consulta/v1/licitacoes";
 
 // Lista de siglas de UF válidas para validação
@@ -38,11 +38,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
+    // REMOVIDO: 'pageSize' dinâmico. Agora o padrão é sempre 10.
     const { keyword, modality, uf, city, page = '1' } = req.query;
 
     const params = new URLSearchParams();
     
-    // 2. RE-ADICIONAMOS O TAMANHO DA PÁGINA, CORRIGINDO O ERRO
+    // FIXO: Define o tamanho da página como 10 para evitar sobrecarga.
     params.append('pagina', Array.isArray(page) ? page[0] : page);
     params.append('tamanhoPagina', '10');
 
@@ -53,7 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     params.append('dataInicial', getYYYYMMDD(pastDate));
     params.append('dataFinal', getYYYYMMDD(today));
 
-    // 3. AGORA A API FILTRA A PALAVRA-CHAVE DIRETAMENTE (MAIS EFICIENTE)
+    // A API filtra a palavra-chave diretamente (mais eficiente)
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
       params.append('palavraChave', keyword);
     }
@@ -91,7 +92,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const rawData = await response.json();
     
-    // 4. NÃO PRECISAMOS MAIS FILTRAR MANUALMENTE, A API JÁ FEZ O TRABALHO
+    // A API já retorna os dados paginados
     const mappedData = (rawData.data || []).map(mapBidData);
 
     return res.status(200).json({
