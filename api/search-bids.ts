@@ -45,7 +45,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { modality, uf, city, page = '1' } = req.query;
+    const { modality, uf, city, page = '1', keyword } = req.query;
 
     const params = new URLSearchParams();
     
@@ -57,19 +57,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     params.append('dataPublicacaoPncpFinal', getYYYYMMDD(today));
     
     params.append('pagina', Array.isArray(page) ? page[0] : page);
-    // Aumentamos o tamanho da página para melhorar a chance de encontrar a cidade no filtro manual
-    params.append('tamanhoPagina', '100'); 
+    params.append('tamanhoPagina', '10'); 
 
-    let modalityCode = '6';
     if (modality && typeof modality === 'string' && modality !== 'all') {
-      modalityCode = modalityMapping[modality] || modality;
+      const modalityCode = modalityMapping[modality] || modality;
+      params.append('codigoModalidade', modalityCode);
     }
-    params.append('codigoModalidade', modalityCode);
 
-    // LÓGICA DE FILTRO FINAL:
-    // 1. Sempre buscamos pelo ESTADO (UF), pois é o filtro mais confiável na API do PNCP.
     if (uf && typeof uf === 'string' && uf !== 'all') {
       params.append('unidadeOrgaoUfSigla', uf.toUpperCase().trim());
+    }
+    
+    if (city && typeof city === 'string' && city !== 'all' && /^\d{7}$/.test(city)) {
+      params.append('unidadeOrgaoCodigoIbge', city);
     }
     
     const url = `${API_BASE_URL}?${params.toString()}`;
@@ -86,29 +86,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const rawData = await response.json();
     let resultsData = rawData.resultado || [];
 
-    // 2. FILTRAGEM MANUAL PELA CIDADE:
-    // Após receber os dados do estado, filtramos aqui pelo código IBGE da cidade.
-    if (city && typeof city === 'string' && /^\d{7}$/.test(city)) {
-        console.log(`Filtrando manualmente por cidade com código IBGE: ${city}`);
-        resultsData = resultsData.filter((bid: any) => 
-            // O campo correto na resposta desta API é 'unidadeOrgaoCodigolbge'
-            bid.unidadeOrgaoCodigolbge?.toString() === city
-        );
+    // Filtro manual por keyword (se fornecido), já que a API não suporta diretamente
+    if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
+      const lowerKeyword = keyword.toLowerCase().trim();
+      resultsData = resultsData.filter((bid: any) => 
+        bid.objetoCompra?.toLowerCase().includes(lowerKeyword)
+      );
     }
     
-    // Pegamos apenas os 10 primeiros resultados após a filtragem para enviar ao frontend
-    const paginatedFilteredData = resultsData.slice(0, 10);
-    
-    const mappedData = paginatedFilteredData.map(mapBidData);
+    const mappedData = resultsData.map(mapBidData);
 
-    // CORREÇÃO FINAL DA PAGINAÇÃO:
-    // Se filtramos por cidade, o total de resultados e de páginas deve refletir
-    // o total do ESTADO, para que o frontend possa navegar entre as páginas e
-    // continuar a busca. No entanto, retornamos apenas os dados da cidade.
-    // Se não houver filtro de cidade, os totais são os do estado mesmo.
+    // Totais baseados na resposta bruta da API (aproximados se keyword for usado)
     const totalForFrontend = rawData.totalRegistros || 0;
     const totalPagesForFrontend = rawData.totalPaginas || 0;
-
 
     return res.status(200).json({
       data: mappedData,
@@ -121,4 +111,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
   }
 }
-
