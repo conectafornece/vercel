@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Troque para endpoint de publicadas para filtrar por data de publicação
+// Endpoint de publicadas para filtrar por data de publicação
 const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao";
 
 // Atualize modalityMapping com todas:
@@ -72,10 +72,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     params.append('pagina', Array.isArray(page) ? page[0] : page);
     params.append('tamanhoPagina', '50'); // Aumente para 50 (máx 500) para mais dados por chamada; equilibre com performance
 
-    // Data inicial e final: últimos 30 dias para evitar antigas
+    // Data inicial e final: últimos 365 dias para incluir "antigas" como junho/2025
     const today = new Date();
     const pastDate = new Date(today);
-    pastDate.setDate(pastDate.getDate() - 30);
+    pastDate.setDate(pastDate.getDate() - 365);
     params.append('dataInicial', getYYYYMMDD(pastDate));
     params.append('dataFinal', getYYYYMMDD(today));
 
