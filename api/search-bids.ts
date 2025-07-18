@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Endpoint para licitações publicadas (para incluir recentes)
-const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao";
+// Endpoint para propostas abertas
+const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta";
 
 // Atualize modalityMapping com todas:
 const modalityMapping: { [key: string]: string } = {
@@ -66,15 +66,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const params = new URLSearchParams();
-    params.append('pagina', Array.isArray(page) ? page[0] : page);
-    // Omita tamanhoPagina para default (~50)
+    params.append('pagina', '1'); // Sempre página 1 na API, paginamos manualmente
+    params.append('tamanhoPagina', '500'); // Máximo para pegar o máximo possível
 
-    // Data inicial e final: últimos 30 dias
-    const today = new Date();
-    const pastDate = new Date(today);
-    pastDate.setDate(pastDate.getDate() - 30);
-    params.append('dataInicial', getYYYYMMDD(pastDate));
-    params.append('dataFinal', getYYYYMMDD(today));
+    // Data final: hoje + 30 dias (sem dataInicial, não suportado)
+    const futureDate = new Date();
+    futureDate.setDate(futureDate.getDate() + 30);
+    params.append('dataFinal', getYYYYMMDD(futureDate));
 
     // Modalidade: Use diretamente o código enviado do frontend
     const modValue = typeof modality === 'string' && modality !== 'all' ? modality : '6'; // Fallback for 'all'
@@ -112,7 +110,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const rawData = await response.json();
     let filteredData = rawData.data || [];
-    console.log(`Resultados brutos da API: ${filteredData.length}`); // Log para depuração
 
     // Filtro manual para cidade se cityName enviado (envie o label 'Jacareí' do frontend como cityName)
     if (cityName && typeof cityName === 'string' && cityName !== 'all') {
@@ -129,13 +126,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       );
     }
 
-    // Mapeie os resultados filtrados
-    const mappedData = filteredData.map(mapBidData);
+    // Aplique paginação server-side: Slice para retornar apenas 10 por página
+    const pageNum = parseInt(Array.isArray(page) ? page[0] : page, 10) || 1;
+    const start = (pageNum - 1) * 10;
+    const end = start + 10;
+    const pagedData = filteredData.slice(start, end);
+
+    // Mapeie os resultados paginados
+    const mappedData = pagedData.map(mapBidData);
 
     return res.status(200).json({
       data: mappedData,
-      total: filteredData.length, // Use o total filtrado (não o da API, pois filtramos)
-      totalPages: Math.ceil(filteredData.length / 10) // Ajuste com tamanhoPagina ~50 default, mas divida por 10 para paginação
+      total: filteredData.length, // Total filtrado para calcular páginas
+      totalPages: Math.ceil(filteredData.length / 10) // Paginação baseada no total filtrado
     });
 
   } catch (error: any) {
