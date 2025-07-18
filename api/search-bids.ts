@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 // Endpoint para propostas abertas
-const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta";
+const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta"; // Use oficial; se test, mude para pncp-consulta
 
 // Atualize modalityMapping com todas:
 const modalityMapping: { [key: string]: string } = {
@@ -66,8 +66,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const params = new URLSearchParams();
-    params.append('pagina', '1'); // Sempre página 1 na API, paginamos manualmente
-    params.append('tamanhoPagina', '500'); // Máximo para pegar o máximo possível
+    params.append('pagina', '1'); // Busca primeira página com máximo, paginamos manual
+    params.append('tamanhoPagina', '500'); // Máx para pegar tudo
 
     // Data final: hoje + 30 dias (sem dataInicial, não suportado)
     const futureDate = new Date();
@@ -117,6 +117,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       filteredData = filteredData.filter((bid: any) => bid.unidadeOrgao.municipioNome?.toLowerCase().includes(lowerCityName)); // Use includes para match partial
     }
 
+    // Filtro para últimos 30 dias (manual, pois endpoint não suporta)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    filteredData = filteredData.filter((bid: any) => new Date(bid.dataPublicacaoPncp) >= thirtyDaysAgo);
+
     // Filtre por keyword no lado do servidor (já que API não suporta)
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
       const lowerKeyword = keyword.toLowerCase();
@@ -126,19 +131,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       );
     }
 
-    // Aplique paginação server-side: Slice para retornar apenas 10 por página
-    const pageNum = parseInt(Array.isArray(page) ? page[0] : page, 10) || 1;
-    const start = (pageNum - 1) * 10;
-    const end = start + 10;
-    const pagedData = filteredData.slice(start, end);
-
-    // Mapeie os resultados paginados
-    const mappedData = pagedData.map(mapBidData);
+    // Mapeie os resultados filtrados
+    const mappedData = filteredData.map(mapBidData);
 
     return res.status(200).json({
       data: mappedData,
-      total: filteredData.length, // Total filtrado para calcular páginas
-      totalPages: Math.ceil(filteredData.length / 10) // Paginação baseada no total filtrado
+      total: filteredData.length, // Use o total filtrado (não o da API, pois filtramos)
+      totalPages: Math.ceil(filteredData.length / 10) // Ajuste com tamanhoPagina
     });
 
   } catch (error: any) {
