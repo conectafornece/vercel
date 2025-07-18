@@ -67,14 +67,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     params.append('codigoModalidadeContratacao', modalityCode);
 
-    // LÓGICA DE FILTRO CORRIGIDA:
-    // Enviamos todos os filtros disponíveis para a API do PNCP.
+    // LÓGICA DE FILTRO FINAL:
+    // Para garantir que a cidade seja filtrada, sempre buscamos pelo ESTADO (UF)
+    // que é um filtro mais confiável na API do PNCP.
     if (uf && typeof uf === 'string' && uf !== 'all') {
         params.append('uf', uf.toUpperCase().trim());
-    }
-    
-    if (city && typeof city === 'string' && /^\d{7}$/.test(city)) {
-        params.append('codigoMunicipiolbge', city);
     }
     
     const url = `${PNCP_BASE_URL}?${params.toString()}`;
@@ -89,12 +86,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const rawData = await response.json();
+    let resultsData = rawData.data || [];
+
+    // FILTRAGEM MANUAL PELA CIDADE:
+    // Após receber os dados do estado, filtramos aqui pelo código IBGE da cidade.
+    if (city && typeof city === 'string' && /^\d{7}$/.test(city)) {
+        resultsData = resultsData.filter((bid: any) => 
+            bid.unidadeOrgao?.codigoIbge === city
+        );
+    }
     
-    // A API do PNCP agora faz toda a filtragem.
-    const mappedData = (rawData.data || []).map(mapBidData);
+    const mappedData = resultsData.map(mapBidData);
 
     return res.status(200).json({
       data: mappedData,
+      // Importante: retornamos o total do ESTADO para o frontend saber que existem mais páginas
       total: rawData.totalRegistros || 0,
       totalPages: rawData.totalPaginas || 0,
     });
