@@ -67,7 +67,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const params = new URLSearchParams();
     params.append('pagina', Array.isArray(page) ? page[0] : page);
-    params.append('tamanhoPagina', '500'); // Máx para mais resultados
+    params.append('tamanhoPagina', '10'); // Ajustado para 10 resultados por página, como solicitado
 
     // Data final: hoje + 30 dias (sem dataInicial, não suportado)
     const futureDate = new Date();
@@ -132,7 +132,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       data: mappedData,
       total: filteredData.length, // Use o total filtrado (não o da API, pois filtramos)
-      totalPages: Math.ceil(filteredData.length / 500) // Ajuste com tamanhoPagina
+      totalPages: Math.ceil(filteredData.length / 10) // Ajuste com tamanhoPagina=10
     });
 
   } catch (error: any) {
