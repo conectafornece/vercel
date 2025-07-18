@@ -1,17 +1,18 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// 1. MUDANÇA FUNDAMENTAL: Apontamos para a API correta do Compras.gov.br
-const API_BASE_URL = "https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarContratacoes_PNCP_14133";
+// 1. MUDANÇA FUNDAMENTAL: Apontamos para o endpoint oficial e atual do Compras.gov.br
+const API_BASE_URL = "https://dadosabertos.compras.gov.br/modulo-contratacoes/v1/contratacoes";
 
 // Mapeia os dados da nova API para o formato que o seu frontend espera.
 const mapBidData = (comprasBid: any) => ({
-  id_unico: comprasBid.numeroControlePNCP,
-  titulo: comprasBid.objetoCompra,
-  orgao: comprasBid.orgaoEntidadeRazaoSocial || 'Não informado',
-  modalidade: comprasBid.modalidadeNome || 'Não informada',
-  data_publicacao: comprasBid.dataPublicacaoPncp,
-  link_oficial: `https://pncp.gov.br/app/editais/${comprasBid.numeroControlePNCP}`, // O link de detalhe ainda é no site do PNCP
-  status: comprasBid.situacaoCompraNomePncp || 'Não informado',
+  id_unico: comprasBid.numero_controle_pncp,
+  titulo: comprasBid.objeto,
+  orgao: comprasBid.orgao?.nome_orgao || 'Não informado',
+  modalidade: comprasBid.modalidade?.nome || 'Não informada',
+  data_publicacao: comprasBid.data_publicacao,
+  // A nova API fornece o link direto para o PNCP
+  link_oficial: comprasBid._links?.pncp?.href || '#', 
+  status: comprasBid.situacao?.nome || 'Não informado',
   fonte: 'Compras.gov.br',
 });
 
@@ -40,19 +41,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const pastDate = new Date();
     pastDate.setDate(today.getDate() - 90);
     
-    params.append('inicio', getYYYYMMDD(pastDate));
-    params.append('fim', getYYYYMMDD(today));
+    params.append('data_inicio', getYYYYMMDD(pastDate));
+    params.append('data_fim', getYYYYMMDD(today));
     params.append('pagina', Array.isArray(page) ? page[0] : page);
-    params.append('tamanhoPagina', '50'); // Aumentamos um pouco para melhorar a filtragem de cidade
+    params.append('tamanho', '100'); // Buscamos o máximo para ter mais chance na filtragem manual
 
-    // O código da modalidade é o mesmo
     if (modality && typeof modality === 'string' && modality !== 'all') {
-      params.append('codigoModalidade', modality);
+      params.append('modalidade', modality);
     }
 
-    // O parâmetro de UF mudou de nome
     if (uf && typeof uf === 'string' && uf !== 'all') {
-      params.append('unidadeOrgaoUfSigla', uf.toUpperCase().trim());
+      params.append('unidade_orgao_uf', uf.toUpperCase().trim());
     }
     
     const url = `${API_BASE_URL}?${params.toString()}`;
@@ -67,23 +66,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const rawData = await response.json();
-    let resultsData = rawData.resultado || [];
+    // 3. ESTRUTURA DE RESPOSTA ATUALIZADA
+    let resultsData = rawData._embedded?.contratacoes || [];
 
-    // 3. FILTRAGEM MANUAL PELA CIDADE (a abordagem robusta)
-    // Após receber os dados do estado, filtramos aqui pelo NOME da cidade.
-    if (city && typeof city === 'string' && city !== 'all') {
-        // Precisamos do nome da cidade, que o frontend já tem.
-        // O frontend envia o código IBGE, mas o objeto de cidades também tem o nome.
-        // Assumimos que o frontend pode enviar o nome da cidade no futuro ou que o dev pode adaptar.
-        // Por agora, esta lógica espera o NOME da cidade. Se o frontend envia o CÓDIGO,
-        // o ideal é que ele envie também um parâmetro `cityName`.
-        // Para simplificar, vamos assumir que o `city` que chega é o NOME.
-        // NOTA PARA O DEV: O ideal é o frontend enviar `city` (código) e `cityName` (nome).
-        
-        // Esta API não retorna o código IBGE, então filtramos pelo nome.
-        const cityNameQuery = city; // Assumindo que `city` é o nome por enquanto
+    // 4. FILTRAGEM MANUAL PELA CIDADE (a abordagem robusta e correta)
+    // Após receber os dados do estado, filtramos aqui pelo CÓDIGO IBGE da cidade.
+    if (city && typeof city === 'string' && /^\d{7}$/.test(city)) {
         resultsData = resultsData.filter((bid: any) => 
-            bid.unidadeOrgaoMunicipioNome?.toLowerCase() === cityNameQuery.toLowerCase()
+            bid.unidade_orgao?.municipio?.codigo_ibge === city
         );
     }
     
@@ -91,8 +81,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({
       data: mappedData,
-      total: rawData.totalRegistros || resultsData.length,
-      totalPages: rawData.totalPaginas || 1,
+      // Usamos os totais da API original para o frontend saber que existem mais páginas
+      total: rawData.page?.totalElements || 0,
+      totalPages: rawData.page?.totalPages || 0,
     });
 
   } catch (error: any) {
