@@ -86,14 +86,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Sigla de UF inválida. Use apenas 2 letras maiúsculas (ex.: SP).' });
     }
 
-    if (city && typeof city === 'string' && city !== 'all') {
-      // Valide se código IBGE é 7 dígitos numéricos
-      if (/^\d{7}$/.test(city)) {
-        params.append('codigoMunicipiolbge', city);
-      } else {
-        return res.status(400).json({ error: 'Código IBGE da cidade inválido (deve ser 7 dígitos numéricos).' });
-      }
-    }
+    // Remova codigoMunicipiolbge para ampliar resultados e filtrar manual por cityName
+    // if (city && typeof city === 'string' && city !== 'all') { ... } // Comentado para teste
 
     const url = `${PNCP_BASE_URL}?${params.toString()}`;
     const response = await fetch(url, {
@@ -110,6 +104,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const rawData = await response.json();
     let filteredData = rawData.data || [];
+    console.log(`Resultados brutos da API: ${filteredData.length}`); // Log para depuração
 
     // Filtro manual para cidade se cityName enviado (envie o label 'Jacareí' do frontend como cityName)
     if (cityName && typeof cityName === 'string' && cityName !== 'all') {
