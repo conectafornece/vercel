@@ -1,7 +1,25 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Endpoint de publicadas para filtrar por data de publicação
-const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao";
+// Endpoint para propostas abertas
+const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta";
+
+// Atualize modalityMapping com todas:
+const modalityMapping: { [key: string]: string } = {
+  pregao_eletronico: '6',
+  pregao_presencial: '7',
+  concorrencia_eletronica: '4',
+  concorrencia_presencial: '5',
+  concurso: '3',
+  leilao_eletronico: '1',
+  leilao_presencial: '13',
+  dialogo_competitivo: '2',
+  dispensa: '8',
+  dispensa_de_licitacao: '8', // Para matcher nomes completos
+  inexigibilidade: '9',
+  manifestacao_interesse: '10',
+  pre_qualificacao: '11',
+  credenciamento: '12',
+};
 
 // Lista de siglas válidas de UF para validação (baseado no IBGE)
 const validUFs = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
@@ -49,14 +67,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const params = new URLSearchParams();
     params.append('pagina', Array.isArray(page) ? page[0] : page);
-    params.append('tamanhoPagina', '50'); // Aumente para 50 (máx 500) para mais dados por chamada; equilibre com performance
+    params.append('tamanhoPagina', '500'); // Máx para mais resultados
 
-    // Data inicial e final: últimos 365 dias para incluir "antigas" como junho/2025
-    const today = new Date();
-    const pastDate = new Date(today);
-    pastDate.setDate(pastDate.getDate() - 365);
-    params.append('dataInicial', getYYYYMMDD(pastDate));
-    params.append('dataFinal', getYYYYMMDD(today));
+    // Data final: hoje + 30 dias (sem dataInicial, não suportado)
+    const futureDate = new Date();
+    futureDate.setDate(futureDate.getDate() + 30);
+    params.append('dataFinal', getYYYYMMDD(futureDate));
 
     // Modalidade: Use diretamente o código enviado do frontend
     const modValue = typeof modality === 'string' && modality !== 'all' ? modality : '6'; // Fallback for 'all'
@@ -98,7 +114,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Filtro manual para cidade se cityName enviado (envie o label 'Jacareí' do frontend como cityName)
     if (cityName && typeof cityName === 'string' && cityName !== 'all') {
       const lowerCityName = cityName.toLowerCase();
-      filteredData = filteredData.filter((bid: any) => bid.unidadeOrgao.municipioNome?.toLowerCase().includes(lowerCityName));
+      filteredData = filteredData.filter((bid: any) => bid.unidadeOrgao.municipioNome?.toLowerCase() === lowerCityName); // Use === para match exato
     }
 
     // Filtre por keyword no lado do servidor (já que API não suporta)
@@ -116,7 +132,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       data: mappedData,
       total: filteredData.length, // Use o total filtrado (não o da API, pois filtramos)
-      totalPages: Math.ceil(filteredData.length / 50) // Ajuste com tamanhoPagina
+      totalPages: Math.ceil(filteredData.length / 500) // Ajuste com tamanhoPagina
     });
 
   } catch (error: any) {
