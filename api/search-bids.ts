@@ -2,7 +2,6 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const API_BASE_URL = "https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarContratacoes_PNCP_14133";
 
-// Lista com todos os códigos de modalidade que queremos pesquisar por padrão
 const ALL_MODALITY_CODES = ['5', '6', '7', '4', '12', '20'];
 
 const mapBidData = (contratacao: any) => ({
@@ -37,7 +36,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     let modalityCodes: string[];
 
-    // Define quais modalidades serão buscadas. Se 'all' ou vazio, busca em todas.
     if (!modality || modality === 'all' || modality === '') {
       modalityCodes = ALL_MODALITY_CODES;
     } else {
@@ -48,7 +46,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const pastDate = new Date();
     pastDate.setDate(today.getDate() - 30);
 
-    // Função interna para buscar os dados de uma única modalidade
     const fetchBidsForModality = async (modalityCode: string) => {
       const params = new URLSearchParams();
       params.append('dataPublicacaoPncpInicial', getYYYYMMDD(pastDate));
@@ -56,7 +53,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       params.append('pagina', page as string);
       params.append('codigoModalidade', modalityCode);
       
-      // Lógica de localização (UF ou Cidade)
       if (city && city !== 'all') {
         params.append('unidadeOrgaoCodigoIbge', city as string);
       } else if (uf && uf !== 'all') {
@@ -75,16 +71,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return response.json();
     };
 
-    // Cria e executa todas as buscas em paralelo
     const promises = modalityCodes.map(code => fetchBidsForModality(code));
     const results = await Promise.allSettled(promises);
 
-    // Agrega os resultados de todas as buscas bem-sucedidas
     let allBids: any[] = [];
     let totalAggregatedResults = 0;
     let maxTotalPages = 0;
 
-    results.forEach((result, index) => {
+    results.forEach((result) => {
       if (result.status === 'fulfilled' && result.value) {
         const data = result.value;
         allBids.push(...(data.resultado || []));
@@ -92,44 +86,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if ((data.totalPaginas || 0) > maxTotalPages) {
             maxTotalPages = data.totalPaginas;
         }
-      } else if (result.status === 'rejected') {
-        console.error(`A requisição para a modalidade ${modalityCodes[index]} falhou:`, result.reason);
       }
     });
     
-    // --- LÓGICA DE FILTRO POR PALAVRA-CHAVE (CONDICIONAL) ---
+    // ===================================================================
+    // INÍCIO DA ALTERAÇÃO - FILTRO DE KEYWORD AGORA É IRRESTRITO
+    // ===================================================================
     let filteredBids = allBids;
-    // O filtro só é aplicado se uma CIDADE for selecionada, para garantir
-    // que estamos trabalhando com um conjunto de dados preciso e relevante.
-    if (city && city !== 'all' && keyword && typeof keyword === 'string' && keyword.trim() !== '') {
-        const lowercasedKeyword = keyword.trim().toLowerCase();
-        filteredBids = allBids.filter(bid =>
-            (bid.objetoCompra && bid.objetoCompra.toLowerCase().includes(lowercasedKeyword)) ||
-            (bid.orgaoEntidadeRazaoSocial && bid.orgaoEntidadeRazaoSocial.toLowerCase().includes(lowercasedKeyword))
-        );
-    } else if (!city || city === 'all' && keyword && typeof keyword === 'string' && keyword.trim() !== '') {
+    
+    // O filtro por palavra-chave agora é aplicado em TODOS os casos,
+    // seja a busca por cidade, estado ou nacional.
+    // ATENÇÃO: Isso pode causar TIMEOUT em buscas muito amplas (ex: estado de SP).
+    if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
         const lowercasedKeyword = keyword.trim().toLowerCase();
         filteredBids = allBids.filter(bid =>
             (bid.objetoCompra && bid.objetoCompra.toLowerCase().includes(lowercasedKeyword)) ||
             (bid.orgaoEntidadeRazaoSocial && bid.orgaoEntidadeRazaoSocial.toLowerCase().includes(lowercasedKeyword))
         );
     }
+    // ===================================================================
+    // FIM DA ALTERAÇÃO
+    // ===================================================================
     
-    // Ordena os resultados finais por data de publicação (mais recente primeiro)
     filteredBids.sort((a, b) => new Date(b.dataPublicacaoPncp).getTime() - new Date(a.dataPublicacaoPncp).getTime());
 
     const mappedData = filteredBids.map(mapBidData);
 
     return res.status(200).json({
       data: mappedData,
-      total: totalAggregatedResults, // Total de resultados ANTES do filtro de palavra-chave
+      total: totalAggregatedResults,
       totalPages: maxTotalPages > 0 ? maxTotalPages : 1,
     });
 
   } catch (error: any) {
-    if (error.name === 'AbortError') {
-      console.error("Timeout na API Compras.gov.br (Contratações)");
-      return res.status(504).json({ error: 'Timeout na requisição à API. Tente novamente ou ajuste os filtros.' });
+    if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+      console.error("Timeout na API Compras.gov.br ou na função Vercel");
+      return res.status(504).json({ error: 'A busca demorou demais para responder (Timeout). Tente ser mais específico com os filtros.' });
     }
     console.error("Erro interno na função Vercel:", error.message);
     return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
