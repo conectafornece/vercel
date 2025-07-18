@@ -101,11 +101,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     
     const mappedData = paginatedFilteredData.map(mapBidData);
 
+    // CORREÇÃO FINAL DA PAGINAÇÃO:
+    // Se filtramos por cidade, o total de resultados e de páginas deve refletir
+    // o total do ESTADO, para que o frontend possa navegar entre as páginas e
+    // continuar a busca. No entanto, retornamos apenas os dados da cidade.
+    // Se não houver filtro de cidade, os totais são os do estado mesmo.
+    const totalForFrontend = rawData.totalRegistros || 0;
+    const totalPagesForFrontend = rawData.totalPaginas || 0;
+
+
     return res.status(200).json({
       data: mappedData,
-      // Importante: retornamos o total do ESTADO para o frontend saber que existem mais páginas
-      total: rawData.totalRegistros || 0,
-      totalPages: rawData.totalPaginas || 0,
+      total: totalForFrontend,
+      totalPages: totalPagesForFrontend,
     });
 
   } catch (error: any) {
@@ -113,3 +121,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
   }
 }
+
