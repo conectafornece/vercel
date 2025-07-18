@@ -3,7 +3,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 // Endpoint for open proposals (use this; switch to 'publicacao' for published bids if needed)
 const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta";
 
-// Atualize modalityMapping com todas:
+// Mapping expandido com variações para evitar mismatches
 const modalityMapping: { [key: string]: string } = {
   pregao_eletronico: '6',
   pregao_presencial: '7',
@@ -14,6 +14,7 @@ const modalityMapping: { [key: string]: string } = {
   leilao_presencial: '13',
   dialogo_competitivo: '2',
   dispensa: '8',
+  dispensa_de_licitacao: '8', // Adicionado para corresponder ao dropdown
   inexigibilidade: '9',
   manifestacao_interesse: '10',
   pre_qualificacao: '11',
@@ -51,9 +52,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { keyword, modality, uf, city, page = '1' } = req.query;
 
+    // Normalize modality para lowercase e replace espaços por underscores
+    let normalizedModality = typeof modality === 'string' ? modality.toLowerCase().replace(/\s+/g, '_') : 'all';
+
     // Exija pelo menos um filtro válido (exceto keyword, que filtramos manualmente)
     if (
-      (!modality || modality === 'all') &&
+      (normalizedModality === 'all') &&
       (!uf || uf === 'all') &&
       (!city || city === 'all') &&
       (!keyword || keyword === '')
@@ -65,15 +69,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     params.append('pagina', Array.isArray(page) ? page[0] : page);
     params.append('tamanhoPagina', '50'); // Aumente para 50 (máx 500) para mais dados por chamada; equilibre com performance
 
-    // Data final: hoje + 30 dias para capturar propostas abertas futuras
-    const futureDate = new Date();
+    // Data final: hoje + 30 dias para capturar propostas abertas futuras (data atual: 18/07/2025)
+    const futureDate = new Date('2025-07-18');
     futureDate.setDate(futureDate.getDate() + 30);
     params.append('dataFinal', getYYYYMMDD(futureDate));
 
-    // Modalidade: Use fallback para 'all' para evitar erro
-    if (modality && typeof modality === 'string' && modality !== 'all' && modalityMapping[modality]) {
-      params.append('codigoModalidadeContratacao', modalityMapping[modality]);
-    } else if (modality === 'all') {
+    // Modalidade: Use o normalized e fallback para 'all'
+    if (normalizedModality !== 'all' && modalityMapping[normalizedModality]) {
+      params.append('codigoModalidadeContratacao', modalityMapping[normalizedModality]);
+    } else if (normalizedModality === 'all') {
       params.append('codigoModalidadeContratacao', '6'); // Fallback: Pregão Eletrônico (comum; ajuste se preferir outra)
     } else {
       return res.status(400).json({ error: 'Modalidade inválida ou não informada (obrigatória).' });
