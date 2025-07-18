@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Endpoint para propostas abertas
-const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta"; // Use oficial; se test, mude para pncp-consulta
+// Endpoint para licitações publicadas (para incluir recentes, com dataInicial)
+const PNCP_BASE_URL = "https://pncp.gov.br/pncp-consulta/v1/contratacoes/publicacao"; // Ajustado para ambiente de teste
 
 // Atualize modalityMapping com todas:
 const modalityMapping: { [key: string]: string } = {
@@ -66,13 +66,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const params = new URLSearchParams();
-    params.append('pagina', '1'); // Busca primeira página com máximo, paginamos manual
-    params.append('tamanhoPagina', '500'); // Máx para pegar tudo
+    params.append('pagina', Array.isArray(page) ? page[0] : page);
+    // Omitido tamanhoPagina para default, evitando erro
 
-    // Data final: hoje + 30 dias (sem dataInicial, não suportado)
-    const futureDate = new Date();
-    futureDate.setDate(futureDate.getDate() + 30);
-    params.append('dataFinal', getYYYYMMDD(futureDate));
+    // Data inicial e final: últimos 30 dias
+    const today = new Date();
+    const pastDate = new Date(today);
+    pastDate.setDate(pastDate.getDate() - 30);
+    params.append('dataInicial', getYYYYMMDD(pastDate));
+    params.append('dataFinal', getYYYYMMDD(today));
 
     // Modalidade: Use diretamente o código enviado do frontend
     const modValue = typeof modality === 'string' && modality !== 'all' ? modality : '6'; // Fallback for 'all'
@@ -116,11 +118,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const lowerCityName = cityName.toLowerCase();
       filteredData = filteredData.filter((bid: any) => bid.unidadeOrgao.municipioNome?.toLowerCase().includes(lowerCityName)); // Use includes para match partial
     }
-
-    // Filtro para últimos 30 dias (manual, pois endpoint não suporta)
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    filteredData = filteredData.filter((bid: any) => new Date(bid.dataPublicacaoPncp) >= thirtyDaysAgo);
 
     // Filtre por keyword no lado do servidor (já que API não suporta)
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
