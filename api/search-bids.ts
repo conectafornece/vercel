@@ -1,9 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// URL base da API Compras.gov.br para licitações
-const API_BASE_URL = "https://compras.dados.gov.br/licitacoes/v1/licitacoes.json";
+// URL base da API Compras.gov.br para contratos (dados a partir de 2021)
+const API_BASE_URL = "https://compras.dados.gov.br/contratos/v1/contratos.json";
 
-// Mapeamento de modalidades (códigos da API Compras.gov.br)
+// Mapeamento de modalidades (códigos da API Compras.gov.br para modalidade_licitacao)
 const modalityMapping: { [key: string]: string } = {
   pregao_eletronico: '6',
   pregao_presencial: '7',
@@ -19,14 +19,14 @@ const modalityMapping: { [key: string]: string } = {
 
 // Mapeia os dados da API para o formato esperado pelo frontend
 const mapBidData = (bid: any) => ({
-  id_unico: bid.id || bid.numeroControle,  // Ajuste baseado em campos reais (ex.: id_licitacao ou similar)
-  titulo: bid.objeto || 'Não informado',
-  orgao: bid.uasg_nome || bid.orgao || 'Não informado',
-  modalidade: bid.modalidade_descricao || 'Não informada',
-  data_publicacao: bid.data_publicacao || bid.dataPublicacao,
-  link_oficial: bid._links?.self?.href || `https://compras.dados.gov.br/licitacoes/doc/licitacao/${bid.id}.html`,
-  status: bid.situacao || 'Não informado',
-  fonte: 'Compras.gov.br',
+  id_unico: bid.id || bid.numero_contrato || 'Não informado',
+  titulo: bid.objeto_contrato || 'Não informado',
+  orgao: bid.razao_social_orgao || bid.orgao || 'Não informado',
+  modalidade: bid.nome_modalidade_licitacao || 'Não informada',
+  data_publicacao: bid.data_assinatura || bid.data_publicacao,
+  link_oficial: bid._links?.self?.href || `https://compras.dados.gov.br/contratos/doc/contrato/${bid.id}.html`,
+  status: bid.situacao_contrato || 'Não informado',
+  fonte: 'Compras.gov.br (Contratos)',
 });
 
 // Função para formatar data para YYYY-MM-DD
@@ -55,32 +55,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const pastDate = new Date();
     pastDate.setDate(today.getDate() - 90);
     
-    params.append('data_publicacao_min', getYYYYMMDD(pastDate));
-    params.append('data_publicacao_max', getYYYYMMDD(today));
+    params.append('data_assinatura_min', getYYYYMMDD(pastDate));
+    params.append('data_assinatura_max', getYYYYMMDD(today));
     
     params.append('offset', offset.toString());
 
     if (modality && typeof modality === 'string' && modality !== 'all') {
       const modalityCode = modalityMapping[modality] || modality;
-      params.append('modalidade', modalityCode);
+      params.append('modalidade_licitacao', modalityCode);
     }
 
     if (uf && typeof uf === 'string' && uf !== 'all') {
-      params.append('uf_uasg', uf.toUpperCase().trim());
+      params.append('uf_orgao', uf.toUpperCase().trim());
     }
     
     if (city && typeof city === 'string' && city !== 'all' && /^\d{7}$/.test(city)) {
-      params.append('uasg_municipio', city);
+      params.append('municipio_orgao', city);
     }
 
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
-      params.append('objeto', keyword.trim());
+      params.append('objeto_contrato', keyword.trim());
     }
     
     const url = `${API_BASE_URL}?${params.toString()}`;
     console.log(`Fetching Compras.gov.br API with URL: ${url}`);
     
-    const response = await fetch(url);
+    // Adiciona timeout de 30 segundos no fetch
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -89,25 +94,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const rawData = await response.json();
-    let resultsData = rawData._embedded?.licitacoes || [];  // Estrutura HAL/HATEOAS típica
+    let resultsData = rawData._embedded?.contratos || [];  // Estrutura HAL/HATEOAS típica para contratos
 
     // Slice para simular pageSize=10
     resultsData = resultsData.slice(0, pageSize);
 
     const mappedData = resultsData.map(mapBidData);
 
-    // Estima total (se resposta tem <500, assume total = offset + len; caso contrário, indefinido ou requer mais calls)
-    const fetchedCount = rawData._embedded?.licitacoes?.length || 0;
-    const estimatedTotal = fetchedCount < 500 ? offset + fetchedCount : undefined;  // Se indefinido, frontend pode tratar como 'mais de X'
+    // Estima total (se <500, assume total = offset + len; caso contrário, indefinido)
+    const fetchedCount = rawData._embedded?.contratos?.length || 0;
+    const estimatedTotal = fetchedCount < 500 ? offset + fetchedCount : undefined;
     const totalPagesForFrontend = estimatedTotal ? Math.ceil(estimatedTotal / pageSize) : undefined;
 
     return res.status(200).json({
       data: mappedData,
-      total: estimatedTotal || fetchedCount,  // Use fetched como fallback
+      total: estimatedTotal || fetchedCount,
       totalPages: totalPagesForFrontend || 1,
     });
 
   } catch (error: any) {
+    if (error.name === 'AbortError') {
+      console.error("Fetch timeout na API Compras.gov.br");
+      return res.status(504).json({ error: 'Timeout na requisição à API. Tente novamente ou ajuste os filtros.' });
+    }
     console.error("Erro interno na função Vercel:", error.message);
     return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
   }
