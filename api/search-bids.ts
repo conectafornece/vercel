@@ -1,25 +1,36 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// 1. O endpoint continua o de licitações, que suporta os filtros.
-const PNCP_BASE_URL = "https://pncp.gov.br/pncp-consulta/v1/licitacoes";
+// Endpoint para consultar contratações publicadas, conforme o manual da API.
+const PNCP_BASE_URL = "https://pncp.gov.br/pncp-consulta/v1/contratacoes/publicacao";
 
-// Lista de siglas de UF válidas para validação
-const validUFs = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
+// Mapeamento de modalidades para os códigos numéricos que a API do PNCP exige.
+const modalityMapping: { [key: string]: string } = {
+  pregao_eletronico: '6',
+  pregao_presencial: '7',
+  concorrencia_eletronica: '4',
+  concorrencia_presencial: '5',
+  concurso: '3',
+  leilao: '1', // Leilão eletrónico, o mais comum
+  dialogo_competitivo: '2',
+  dispensa_de_licitacao: '8',
+  inexigibilidade: '9',
+  credenciamento: '12',
+};
 
-// Mapeia os dados da API para o formato que seu frontend espera
+// Mapeia os dados da API do PNCP para o formato que o seu frontend espera.
 const mapBidData = (pncpBid: any) => ({
-  id_unico: pncpBid.numeroControlePNCP || pncpBid.numeroCompra,
+  id_unico: pncpBid.numeroControlePNCP,
   titulo: pncpBid.objetoCompra,
   orgao: pncpBid.orgaoEntidade?.razaoSocial || 'Não informado',
-  modalidade: pncpBid.modalidade?.nome || 'Não informada',
+  modalidade: pncpBid.modalidadeNome || 'Não informada',
   data_publicacao: pncpBid.dataPublicacaoPncp,
-  // Link correto para o detalhe da licitação/edital
-  link_oficial: `https://pncp.gov.br/app/editais/${pncpBid.id}/detalhe`,
-  status: pncpBid.situacaoCompra?.nome || 'Não informado',
+  // O link de detalhe é construído com o número de controle.
+  link_oficial: `https://pncp.gov.br/app/contratacoes/${pncpBid.numeroControlePNCP}`,
+  status: pncpBid.situacaoCompraNome || 'Não informado',
   fonte: 'PNCP',
 });
 
-// Função para formatar data para YYYYMMDD
+// Função auxiliar para formatar datas no padrão YYYYMMDD.
 function getYYYYMMDD(date: Date): string {
   const yyyy = date.getFullYear();
   const mm = String(date.getMonth() + 1).padStart(2, '0');
@@ -28,7 +39,7 @@ function getYYYYMMDD(date: Date): string {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Configurações de CORS
+  // Configurações de CORS para permitir acesso do seu frontend.
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -38,47 +49,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    // REMOVIDO: 'pageSize' dinâmico. Agora o padrão é sempre 10.
     const { keyword, modality, uf, city, page = '1' } = req.query;
 
     const params = new URLSearchParams();
     
-    // FIXO: Define o tamanho da página como 10 para evitar sobrecarga.
+    // PAGINAÇÃO: Fixo em 10 itens por página, conforme solicitado.
     params.append('pagina', Array.isArray(page) ? page[0] : page);
     params.append('tamanhoPagina', '10');
 
-    // Define um período de busca padrão (últimos 90 dias)
+    // PERÍODO: A API exige um período. Usamos os últimos 90 dias como padrão.
     const today = new Date();
     const pastDate = new Date();
     pastDate.setDate(today.getDate() - 90);
     params.append('dataInicial', getYYYYMMDD(pastDate));
     params.append('dataFinal', getYYYYMMDD(today));
 
-    // A API filtra a palavra-chave diretamente (mais eficiente)
-    if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
-      params.append('palavraChave', keyword);
-    }
-
-    // Filtro de Modalidade (se enviado)
+    // FILTRO DE MODALIDADE: Converte o nome da modalidade para o código exigido pela API.
+    // Se "todas" for selecionado, um código padrão é usado para satisfazer a API.
+    let modalityCode = '6'; // Pregão Eletrônico como fallback
     if (modality && typeof modality === 'string' && modality !== 'all') {
-        // A API de licitações parece aceitar o nome direto, não o código
-        params.append('modalidade', modality);
+      modalityCode = modalityMapping[modality] || modality; // Usa o código do mapping ou o valor recebido
     }
+    params.append('codigoModalidadeContratacao', modalityCode);
 
-    // Filtro de UF (com validação)
+    // FILTRO DE UF (Estado)
     if (uf && typeof uf === 'string' && uf !== 'all') {
-      const normalizedUf = uf.toUpperCase().trim();
-      if (validUFs.includes(normalizedUf)) {
-        params.append('uf', normalizedUf);
+      params.append('uf', uf.toUpperCase().trim());
+    }
+    
+    // FILTRO DE MUNICÍPIO (Cidade): Usa o código IBGE
+    if (city && typeof city === 'string' && city !== 'all') {
+      if (/^\d{7}$/.test(city)) {
+        params.append('codigoMunicipiolbge', city);
       }
     }
     
-    // Filtro de Município (código IBGE)
-    if (city && typeof city === 'string' && city !== 'all') {
-      if (/^\d{7}$/.test(city)) {
-        params.append('codigoMunicipio', city);
-      }
-    }
+    // O endpoint de 'contratacoes/publicacao' não suporta 'palavraChave'.
+    // A filtragem por palavra-chave teria que ser feita no frontend após receber os dados.
 
     const url = `${PNCP_BASE_URL}?${params.toString()}`;
     
@@ -92,13 +99,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const rawData = await response.json();
     
-    // A API já retorna os dados paginados
     const mappedData = (rawData.data || []).map(mapBidData);
 
+    // RETORNO PARA O FRONTEND: Inclui os dados da paginação.
     return res.status(200).json({
       data: mappedData,
-      total: rawData.total, // Usamos o total que a API nos dá
-      totalPages: rawData.totalPaginas,
+      total: rawData.totalRegistros || 0,
+      totalPages: rawData.totalPaginas || 0,
     });
 
   } catch (error: any) {
