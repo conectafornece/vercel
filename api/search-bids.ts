@@ -20,17 +20,6 @@ const modalityMapping: { [key: string]: string } = {
   credenciamento: '12',
 };
 
-// Na handler:
-// Se modality === 'all', omita ou fallback
-if (modality && typeof modality === 'string' && modality !== 'all' && modalityMapping[modality]) {
-  params.append('codigoModalidadeContratacao', modalityMapping[modality]);
-} else if (modality === 'all') {
-  // Omita: params.append('codigoModalidadeContratacao', ''); // Teste se API permite
-  // OU fallback: params.append('codigoModalidadeContratacao', '6'); // Pregão Eletrônico como default
-} else {
-  return res.status(400).json({ error: 'Modalidade inválida ou não informada (obrigatória).' });
-}
-
 // Mapeia os dados da API para o formato esperado
 const mapBidData = (pncpBid: any) => ({
   id_unico: pncpBid.numeroControlePNCP || pncpBid.numeroCompra,
@@ -81,12 +70,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     futureDate.setDate(futureDate.getDate() + 30);
     params.append('dataFinal', getYYYYMMDD(futureDate));
 
-    // Modalidade é obrigatória; se 'all', omita (teste se API permite; senão, defina default)
+    // Modalidade: Use fallback para 'all' para evitar erro
     if (modality && typeof modality === 'string' && modality !== 'all' && modalityMapping[modality]) {
       params.append('codigoModalidadeContratacao', modalityMapping[modality]);
     } else if (modality === 'all') {
-      // Omita; se API erro, defina um default como '6' (Pregão Eletrônico, comum)
-      params.append('codigoModalidadeContratacao', '6'); // Default fallback
+      params.append('codigoModalidadeContratacao', '6'); // Fallback: Pregão Eletrônico (comum; ajuste se preferir outra)
     } else {
       return res.status(400).json({ error: 'Modalidade inválida ou não informada (obrigatória).' });
     }
@@ -114,7 +102,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const rawData = await response.json();
     let filteredData = rawData.data || [];
 
-    // Filtre por keyword server-side (já que API não suporta)
+    // Filtre por keyword no lado do servidor (já que API não suporta)
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
       const lowerKeyword = keyword.toLowerCase();
       filteredData = filteredData.filter((bid: any) =>
@@ -133,7 +121,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
   } catch (error: any) {
-    console.error("Erro interno:", error);
+    console.error("Erro interno na função Vercel:", error.message, error.stack); // Mais logging para depuração
     return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
   }
 }
