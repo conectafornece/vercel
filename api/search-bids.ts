@@ -1,9 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Apontamos para a API de Dados Abertos do Compras.gov.br
-const API_BASE_URL = "https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarContratacoes_PNCP_14133";
+// URL base da API Compras.gov.br para licitações
+const API_BASE_URL = "https://compras.dados.gov.br/licitacoes/v1/licitacoes.json";
 
-// Mapeamento de modalidades para os códigos numéricos que a API exige.
+// Mapeamento de modalidades (códigos da API Compras.gov.br)
 const modalityMapping: { [key: string]: string } = {
   pregao_eletronico: '6',
   pregao_presencial: '7',
@@ -17,19 +17,19 @@ const modalityMapping: { [key: string]: string } = {
   credenciamento: '12',
 };
 
-// Mapeia os dados da API para o formato que o seu frontend espera.
-const mapBidData = (comprasBid: any) => ({
-  id_unico: comprasBid.numeroControlePNCP,
-  titulo: comprasBid.objetoCompra,
-  orgao: comprasBid.orgaoEntidadeRazaoSocial || 'Não informado',
-  modalidade: comprasBid.modalidadeNome || 'Não informada',
-  data_publicacao: comprasBid.dataPublicacaoPncp,
-  link_oficial: `https://pncp.gov.br/app/contratacoes/${comprasBid.numeroControlePNCP}`,
-  status: comprasBid.situacaoCompraNomePncp || 'Não informado',
+// Mapeia os dados da API para o formato esperado pelo frontend
+const mapBidData = (bid: any) => ({
+  id_unico: bid.id || bid.numeroControle,  // Ajuste baseado em campos reais (ex.: id_licitacao ou similar)
+  titulo: bid.objeto || 'Não informado',
+  orgao: bid.uasg_nome || bid.orgao || 'Não informado',
+  modalidade: bid.modalidade_descricao || 'Não informada',
+  data_publicacao: bid.data_publicacao || bid.dataPublicacao,
+  link_oficial: bid._links?.self?.href || `https://compras.dados.gov.br/licitacoes/doc/licitacao/${bid.id}.html`,
+  status: bid.situacao || 'Não informado',
   fonte: 'Compras.gov.br',
 });
 
-// Função para formatar a data para o padrão YYYY-MM-DD.
+// Função para formatar data para YYYY-MM-DD
 function getYYYYMMDD(date: Date): string {
   return date.toISOString().split('T')[0];
 }
@@ -46,6 +46,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const { modality, uf, city, page = '1', keyword } = req.query;
+    const pageSize = 10;  // Simula 10 por página (API retorna até 500)
+    const offset = (parseInt(page as string) - 1) * pageSize;
 
     const params = new URLSearchParams();
     
@@ -53,23 +55,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const pastDate = new Date();
     pastDate.setDate(today.getDate() - 90);
     
-    params.append('dataPublicacaoPncpInicial', getYYYYMMDD(pastDate));
-    params.append('dataPublicacaoPncpFinal', getYYYYMMDD(today));
+    params.append('data_publicacao_min', getYYYYMMDD(pastDate));
+    params.append('data_publicacao_max', getYYYYMMDD(today));
     
-    params.append('pagina', Array.isArray(page) ? page[0] : page);
-    params.append('tamanhoPagina', '10'); 
+    params.append('offset', offset.toString());
 
     if (modality && typeof modality === 'string' && modality !== 'all') {
       const modalityCode = modalityMapping[modality] || modality;
-      params.append('codigoModalidade', modalityCode);
+      params.append('modalidade', modalityCode);
     }
 
     if (uf && typeof uf === 'string' && uf !== 'all') {
-      params.append('unidadeOrgaoUfSigla', uf.toUpperCase().trim());
+      params.append('uf_uasg', uf.toUpperCase().trim());
     }
     
     if (city && typeof city === 'string' && city !== 'all' && /^\d{7}$/.test(city)) {
-      params.append('unidadeOrgaoCodigoIbge', city);
+      params.append('uasg_municipio', city);
+    }
+
+    if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
+      params.append('objeto', keyword.trim());
     }
     
     const url = `${API_BASE_URL}?${params.toString()}`;
@@ -84,26 +89,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const rawData = await response.json();
-    let resultsData = rawData.resultado || [];
+    let resultsData = rawData._embedded?.licitacoes || [];  // Estrutura HAL/HATEOAS típica
 
-    // Filtro manual por keyword (se fornecido), já que a API não suporta diretamente
-    if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
-      const lowerKeyword = keyword.toLowerCase().trim();
-      resultsData = resultsData.filter((bid: any) => 
-        bid.objetoCompra?.toLowerCase().includes(lowerKeyword)
-      );
-    }
-    
+    // Slice para simular pageSize=10
+    resultsData = resultsData.slice(0, pageSize);
+
     const mappedData = resultsData.map(mapBidData);
 
-    // Totais baseados na resposta bruta da API (aproximados se keyword for usado)
-    const totalForFrontend = rawData.totalRegistros || 0;
-    const totalPagesForFrontend = rawData.totalPaginas || 0;
+    // Estima total (se resposta tem <500, assume total = offset + len; caso contrário, indefinido ou requer mais calls)
+    const fetchedCount = rawData._embedded?.licitacoes?.length || 0;
+    const estimatedTotal = fetchedCount < 500 ? offset + fetchedCount : undefined;  // Se indefinido, frontend pode tratar como 'mais de X'
+    const totalPagesForFrontend = estimatedTotal ? Math.ceil(estimatedTotal / pageSize) : undefined;
 
     return res.status(200).json({
       data: mappedData,
-      total: totalForFrontend,
-      totalPages: totalPagesForFrontend,
+      total: estimatedTotal || fetchedCount,  // Use fetched como fallback
+      totalPages: totalPagesForFrontend || 1,
     });
 
   } catch (error: any) {
