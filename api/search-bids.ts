@@ -53,7 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     
     const today = new Date();
     const pastDate = new Date();
-    pastDate.setDate(today.getDate() - 90);
+    pastDate.setDate(today.getDate() - 365);  // Ampliei para 365 dias para mais dados (ajuste se necessário)
     
     params.append('data_assinatura_min', getYYYYMMDD(pastDate));
     params.append('data_assinatura_max', getYYYYMMDD(today));
@@ -65,13 +65,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       params.append('modalidade_licitacao', modalityCode);
     }
 
-    if (uf && typeof uf === 'string' && uf !== 'all') {
-      params.append('uf_orgao', uf.toUpperCase().trim());
-    }
-    
-    if (city && typeof city === 'string' && city !== 'all' && /^\d{7}$/.test(city)) {
-      params.append('municipio_orgao', city);
-    }
+    // Removido: uf_orgao e municipio_orgao (inválidos, causam 500)
+    // Nota: Se precisar filtrar por localização, use outro endpoint para obter UASG e adicione params.append('uasg', 'código1,código2')
 
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
       params.append('objeto_contrato', keyword.trim());
@@ -80,7 +75,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const url = `${API_BASE_URL}?${params.toString()}`;
     console.log(`Fetching Compras.gov.br API with URL: ${url}`);
     
-    // Adiciona timeout de 30 segundos no fetch
+    // Timeout de 30 segundos
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
