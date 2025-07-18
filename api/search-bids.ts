@@ -3,18 +3,33 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 // Endpoint for open proposals (use this; switch to 'publicacao' for published bids if needed)
 const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta";
 
-// Mapeamento de modalidades (atualizado com códigos do manual; adicione mais se necessário)
+// Atualize modalityMapping com todas:
 const modalityMapping: { [key: string]: string } = {
   pregao_eletronico: '6',
   pregao_presencial: '7',
-  concorrencia: '4',
+  concorrencia_eletronica: '4',
+  concorrencia_presencial: '5',
   concurso: '3',
   leilao_eletronico: '1',
+  leilao_presencial: '13',
   dialogo_competitivo: '2',
   dispensa: '8',
   inexigibilidade: '9',
-  // Adicione outros da tabela 5.2 do manual
+  manifestacao_interesse: '10',
+  pre_qualificacao: '11',
+  credenciamento: '12',
 };
+
+// Na handler:
+// Se modality === 'all', omita ou fallback
+if (modality && typeof modality === 'string' && modality !== 'all' && modalityMapping[modality]) {
+  params.append('codigoModalidadeContratacao', modalityMapping[modality]);
+} else if (modality === 'all') {
+  // Omita: params.append('codigoModalidadeContratacao', ''); // Teste se API permite
+  // OU fallback: params.append('codigoModalidadeContratacao', '6'); // Pregão Eletrônico como default
+} else {
+  return res.status(400).json({ error: 'Modalidade inválida ou não informada (obrigatória).' });
+}
 
 // Mapeia os dados da API para o formato esperado
 const mapBidData = (pncpBid: any) => ({
