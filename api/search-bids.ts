@@ -2,6 +2,9 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const API_BASE_URL = "https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarContratacoes_PNCP_14133";
 
+// Lista com todos os códigos de modalidade que queremos pesquisar por padrão
+const ALL_MODALITY_CODES = ['5', '6', '7', '4', '12', '20'];
+
 const mapBidData = (contratacao: any) => ({
   id_unico: contratacao.idCompra,
   titulo: contratacao.objetoCompra,
@@ -30,13 +33,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { modality, uf, city, page = '1', keyword } = req.query; // Keyword é lido aqui
+    const { modality, uf, city, page = '1', keyword } = req.query;
 
-    if (!modality || (Array.isArray(modality) && modality.length === 0) || modality === '') {
-        return res.status(400).json({ error: 'Por favor, selecione pelo menos uma modalidade de contratação para realizar a busca.' });
+    let modalityCodes: string[];
+
+    // --- LÓGICA DE MODALIDADE FINAL ---
+    // Se o frontend enviar 'all' ou não enviar nada, usamos nossa lista padrão completa.
+    // Caso contrário, usamos as modalidades que o usuário selecionou.
+    if (!modality || modality === 'all' || modality === '') {
+      modalityCodes = ALL_MODALITY_CODES;
+    } else {
+      modalityCodes = (modality as string).split(',');
     }
-
-    const modalityCodes = (modality as string).split(',');
 
     const today = new Date();
     const pastDate = new Date();
@@ -84,7 +92,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     });
 
-    // --- LÓGICA DE FILTRO POR PALAVRA-CHAVE NO BACKEND ---
+    // --- FILTRO FINAL POR PALAVRA-CHAVE ---
     let filteredBids = allBids;
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
         const lowercasedKeyword = keyword.trim().toLowerCase();
@@ -94,14 +102,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         );
     }
     
-    // Ordenar os resultados finais por data de publicação
     filteredBids.sort((a, b) => new Date(b.dataPublicacaoPncp).getTime() - new Date(a.dataPublicacaoPncp).getTime());
 
     const mappedData = filteredBids.map(mapBidData);
 
     return res.status(200).json({
       data: mappedData,
-      total: totalAggregatedResults, // Total de resultados ANTES do filtro de palavra-chave
+      total: totalAggregatedResults,
       totalPages: maxTotalPages > 0 ? maxTotalPages : 1,
     });
 
