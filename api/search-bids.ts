@@ -1,7 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// 1. ENDPOINT CORRIGIDO: Apontamos para a API de Dados Abertos do Compras.gov.br,
-// que tem um módulo específico para os dados do PNCP.
+// Apontamos para a API de Dados Abertos do Compras.gov.br
 const API_BASE_URL = "https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarContratacoes_PNCP_14133";
 
 // Mapeamento de modalidades para os códigos numéricos que a API exige.
@@ -18,21 +17,20 @@ const modalityMapping: { [key: string]: string } = {
   credenciamento: '12',
 };
 
-// Mapeia os dados da nova API para o formato que o seu frontend espera.
+// Mapeia os dados da API para o formato que o seu frontend espera.
 const mapBidData = (comprasBid: any) => ({
   id_unico: comprasBid.numeroControlePNCP,
   titulo: comprasBid.objetoCompra,
   orgao: comprasBid.orgaoEntidadeRazaoSocial || 'Não informado',
   modalidade: comprasBid.modalidadeNome || 'Não informada',
   data_publicacao: comprasBid.dataPublicacaoPncp,
-  link_oficial: `https://pncp.gov.br/app/contratacoes/${comprasBid.numeroControlePNCP}`, // O link de detalhe ainda é no site do PNCP
+  link_oficial: `https://pncp.gov.br/app/contratacoes/${comprasBid.numeroControlePNCP}`,
   status: comprasBid.situacaoCompraNomePncp || 'Não informado',
   fonte: 'Compras.gov.br',
 });
 
-// Função para formatar a data para o padrão YYYY-MM-DD exigido pela nova API.
+// Função para formatar a data para o padrão YYYY-MM-DD.
 function getYYYYMMDD(date: Date): string {
-  // A API de dados abertos espera o formato YYYY-MM-DD
   return date.toISOString().split('T')[0];
 }
 
@@ -51,33 +49,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const params = new URLSearchParams();
     
-    // 2. PARÂMETROS ATUALIZADOS para a nova API
     const today = new Date();
     const pastDate = new Date();
     pastDate.setDate(today.getDate() - 90);
     
-    // Nomes dos parâmetros de data corrigidos
     params.append('dataPublicacaoPncpInicial', getYYYYMMDD(pastDate));
     params.append('dataPublicacaoPncpFinal', getYYYYMMDD(today));
     
     params.append('pagina', Array.isArray(page) ? page[0] : page);
-    params.append('tamanhoPagina', '10');
+    // Aumentamos o tamanho da página para melhorar a chance de encontrar a cidade no filtro manual
+    params.append('tamanhoPagina', '100'); 
 
-    // A API exige um código de modalidade, então usamos um padrão se "todas" for selecionado.
-    let modalityCode = '6'; // Pregão Eletrônico como fallback
+    let modalityCode = '6';
     if (modality && typeof modality === 'string' && modality !== 'all') {
       modalityCode = modalityMapping[modality] || modality;
     }
-    params.append('codigoModalidade', modalityCode); // Nome do parâmetro corrigido
+    params.append('codigoModalidade', modalityCode);
 
-    // Nome do parâmetro de UF corrigido
+    // LÓGICA DE FILTRO FINAL:
+    // 1. Sempre buscamos pelo ESTADO (UF), pois é o filtro mais confiável na API do PNCP.
     if (uf && typeof uf === 'string' && uf !== 'all') {
       params.append('unidadeOrgaoUfSigla', uf.toUpperCase().trim());
-    }
-    
-    // Nome do parâmetro de cidade corrigido
-    if (city && typeof city === 'string' && /^\d{7}$/.test(city)) {
-        params.append('unidadeOrgaoCodigolbge', city);
     }
     
     const url = `${API_BASE_URL}?${params.toString()}`;
@@ -92,14 +84,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const rawData = await response.json();
+    let resultsData = rawData.resultado || [];
+
+    // 2. FILTRAGEM MANUAL PELA CIDADE:
+    // Após receber os dados do estado, filtramos aqui pelo código IBGE da cidade.
+    if (city && typeof city === 'string' && /^\d{7}$/.test(city)) {
+        console.log(`Filtrando manualmente por cidade com código IBGE: ${city}`);
+        resultsData = resultsData.filter((bid: any) => 
+            // O campo correto na resposta desta API é 'unidadeOrgaoCodigolbge'
+            bid.unidadeOrgaoCodigolbge?.toString() === city
+        );
+    }
     
-    // 3. ESTRUTURA DE RESPOSTA ATUALIZADA
-    const resultsData = rawData.resultado || [];
+    // Pegamos apenas os 10 primeiros resultados após a filtragem para enviar ao frontend
+    const paginatedFilteredData = resultsData.slice(0, 10);
     
-    const mappedData = resultsData.map(mapBidData);
+    const mappedData = paginatedFilteredData.map(mapBidData);
 
     return res.status(200).json({
       data: mappedData,
+      // Importante: retornamos o total do ESTADO para o frontend saber que existem mais páginas
       total: rawData.totalRegistros || 0,
       totalPages: rawData.totalPaginas || 0,
     });
