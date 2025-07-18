@@ -62,7 +62,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     params.append('dataFinal', getYYYYMMDD(today));
 
     // A API exige um código de modalidade. Usamos um padrão se nenhum for enviado.
-    let modalityCode = '6'; // Pregão Eletrônico como fallback
+    // Se o utilizador selecionar "Todas as Modalidades", enviamos um código padrão (Pregão Eletrónico)
+    // para cumprir o requisito da API.
+    let modalityCode = '6'; 
     if (modality && typeof modality === 'string' && modality !== 'all') {
       modalityCode = modalityMapping[modality] || modality;
     }
@@ -71,9 +73,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const isCityValid = city && typeof city === 'string' && /^\d{7}$/.test(city);
 
     // LÓGICA DE FILTRO CORRIGIDA:
-    // Se uma cidade válida for fornecida, usamos APENAS o filtro de cidade.
-    // O filtro de UF é ignorado para evitar conflito na API do PNCP.
+    // A API do PNCP parece ignorar os filtros de localização se 'uf' e 'codigoMunicipiolbge'
+    // forem enviados ao mesmo tempo. Para resolver isso, damos prioridade ao filtro mais específico.
     if (isCityValid) {
+        // Se uma cidade válida for fornecida, usamos APENAS o filtro de cidade.
         params.append('codigoMunicipiolbge', city as string);
     } else if (uf && typeof uf === 'string' && uf !== 'all') {
         // Se não houver cidade, usamos o filtro de estado.
