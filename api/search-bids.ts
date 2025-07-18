@@ -3,110 +3,114 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 const API_BASE_URL = "https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarContratacoes_PNCP_14133";
 
 const mapBidData = (contratacao: any) => ({
-  id_unico: contratacao.idCompra,
-  titulo: contratacao.objetoCompra,
-  orgao: contratacao.orgaoEntidadeRazaoSocial,
-  modalidade: contratacao.modalidadeNome,
-  data_publicacao: contratacao.dataPublicacaoPncp,
-  link_oficial: `https://www.gov.br/pncp/pt-br/contrato/-/contratos/${contratacao.numeroControlePNCP}`,
-  status: contratacao.situacaoCompraNomePncp,
-  municipio: contratacao.unidadeOrgaoMunicipioNome,
-  municipio_codigo_ibge: contratacao.unidadeOrgaoCodigolbge,
-  uf: contratacao.unidadeOrgaoUfSigla,
-  fonte: 'Compras.gov.br (PNCP)',
+  id_unico: contratacao.idCompra,
+  titulo: contratacao.objetoCompra,
+  orgao: contratacao.orgaoEntidadeRazaoSocial,
+  modalidade: contratacao.modalidadeNome,
+  data_publicacao: contratacao.dataPublicacaoPncp,
+  link_oficial: `https://www.gov.br/pncp/pt-br/contrato/-/contratos/${contratacao.numeroControlePNCP}`,
+  status: contratacao.situacaoCompraNomePncp,
+  municipio: contratacao.unidadeOrgaoMunicipioNome,
+  municipio_codigo_ibge: contratacao.unidadeOrgaoCodigolbge,
+  uf: contratacao.unidadeOrgaoUfSigla,
+  fonte: 'Compras.gov.br (PNCP)',
 });
 
 function getYYYYMMDD(date: Date): string {
-  return date.toISOString().split('T')[0];
+  return date.toISOString().split('T')[0];
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
 
-  try {
-    const { modality, uf, city, page = '1' } = req.query;
+  try {
+    const { modality, uf, city, page = '1' } = req.query;
 
-    // ===================================================================
-    // INÍCIO DA NOVA VALIDAÇÃO
-    // Impede buscas totalmente abertas que a API do governo não suporta.
-    // ===================================================================
-    if (modality === 'all' && uf === 'all' && city === 'all') {
-        return res.status(400).json({ error: 'Por favor, selecione pelo menos um filtro (modalidade ou estado) para realizar a busca.' });
+    if (!modality || (Array.isArray(modality) && modality.length === 0) || modality === '') {
+        return res.status(400).json({ error: 'Por favor, selecione pelo menos uma modalidade de contratação para realizar a busca.' });
     }
-    // ===================================================================
-    // FIM DA NOVA VALIDAÇÃO
-    // ===================================================================
 
-    const params = new URLSearchParams();
-    const today = new Date();
-    const pastDate = new Date();
-    pastDate.setDate(today.getDate() - 30);
+    // A API agora espera uma string separada por vírgulas, ex: "5,6,7"
+    const modalityCodes = (modality as string).split(',');
 
-    params.append('dataPublicacaoPncpInicial', getYYYYMMDD(pastDate));
-    params.append('dataPublicacaoPncpFinal', getYYYYMMDD(today));
-    
-    if (page) params.append('pagina', page as string);
-    
-    if (modality && modality !== 'all') {
-        params.append('codigoModalidade', modality as string);
-    }
-    
-    if (city && city !== 'all') {
-        params.append('unidadeOrgaoCodigoIbge', city as string);
-    } else if (uf && uf !== 'all') {
-        params.append('unidadeOrgaoUfSigla', uf as string);
-    }
-    
-    const url = `${API_BASE_URL}?${params.toString()}`;
-    console.log(`Buscando na API PNCP com a URL: ${url}`);
-    
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const today = new Date();
+    const pastDate = new Date();
+    pastDate.setDate(today.getDate() - 30);
 
-    const response = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeoutId);
+    // Criar uma função para buscar os dados de uma única modalidade
+    const fetchBidsForModality = async (modalityCode: string) => {
+      const params = new URLSearchParams();
+      params.append('dataPublicacaoPncpInicial', getYYYYMMDD(pastDate));
+      params.append('dataPublicacaoPncpFinal', getYYYYMMDD(today));
+      params.append('pagina', page as string);
+      
+      // Adiciona o código da modalidade para esta requisição específica
+      params.append('codigoModalidade', modalityCode);
+      
+      // Lógica de localização (UF ou Cidade)
+      if (city && city !== 'all') {
+        params.append('unidadeOrgaoCodigoIbge', city as string);
+      } else if (uf && uf !== 'all') {
+        params.append('unidadeOrgaoUfSigla', uf as string);
+      }
 
-    if (!response.ok) {
-        // A resposta do erro vem dentro de um objeto JSON, então precisamos analisá-lo.
-        const errorData = await response.json(); 
-        const errorMessage = errorData.message || 'Erro desconhecido';
-        console.error(`Erro na API Compras.gov.br (HTTP Status ${response.status}): ${errorMessage} - URL: ${url}`);
-        return res.status(response.status).json({ error: `A API de Contratações retornou um erro. Detalhes: { "statusCode": ${response.status}, "message": "${errorMessage}" }` });
-    }
+      const url = `${API_BASE_URL}?${params.toString()}`;
+      console.log(`Disparando busca para modalidade ${modalityCode}: ${url}`);
 
-    let rawData;
-    try {
-        rawData = await response.json();
-    } catch (e) {
-        console.error("Falha ao analisar a resposta da API como JSON. A API pode estar offline ou retornando uma página de erro em HTML.", e);
-        return res.status(502).json({ error: 'A API do governo retornou uma resposta inválida (não-JSON). O serviço pode estar temporariamente indisponível.' });
-    }
+      const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
 
-    const resultsData = rawData.resultado || [];
-    
-    const total = rawData.totalRegistros || resultsData.length;
-    const totalPages = rawData.totalPaginas || Math.ceil(total / 10);
+      if (!response.ok) {
+        // Se falhar, loga o erro mas não quebra a execução para as outras modalidades
+        console.error(`Erro ao buscar modalidade ${modalityCode}. Status: ${response.status}`);
+        return null; // Retorna nulo para indicar falha
+      }
+      return response.json();
+    };
 
-    const mappedData = resultsData.map(mapBidData);
+    // Criar um array de promessas, uma para cada modalidade selecionada
+    const promises = modalityCodes.map(code => fetchBidsForModality(code));
 
-    return res.status(200).json({
-      data: mappedData,
-      total: total,
-      totalPages: totalPages > 0 ? totalPages : 1,
-    });
+    // Executar todas as promessas em paralelo e esperar os resultados
+    const results = await Promise.allSettled(promises);
 
-  } catch (error: any) {
-    if (error.name === 'AbortError') {
-      console.error("Timeout na API Compras.gov.br (Contratações)");
-      return res.status(504).json({ error: 'Timeout na requisição à API. Tente novamente ou ajuste os filtros.' });
-    }
-    console.error("Erro interno na função Vercel:", error.message);
-    return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
-  }
+    let allBids: any[] = [];
+    let totalAggregatedResults = 0;
+    let maxTotalPages = 0;
+
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled' && result.value) {
+        const data = result.value;
+        const bidsFromResult = data.resultado || [];
+        allBids = [...allBids, ...bidsFromResult];
+        
+        totalAggregatedResults += data.totalRegistros || 0;
+        if ((data.totalPaginas || 0) > maxTotalPages) {
+            maxTotalPages = data.totalPaginas;
+        }
+      } else if (result.status === 'rejected') {
+        console.error(`A requisição para a modalidade ${modalityCodes[index]} falhou:`, result.reason);
+      }
+    });
+    
+    // Ordenar os resultados consolidados por data de publicação (mais recente primeiro)
+    allBids.sort((a, b) => new Date(b.dataPublicacaoPncp).getTime() - new Date(a.dataPublicacaoPncp).getTime());
+
+    const mappedData = allBids.map(mapBidData);
+
+    return res.status(200).json({
+      data: mappedData,
+      total: totalAggregatedResults,
+      totalPages: maxTotalPages > 0 ? maxTotalPages : 1,
+    });
+
+  } catch (error: any) {
+    console.error("Erro interno na função Vercel:", error.message);
+    return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
+  }
 }
