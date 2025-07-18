@@ -30,30 +30,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { modality, uf, city, page = '1' } = req.query;
+    const { modality, uf, city, page = '1', keyword } = req.query; // Keyword é lido aqui
 
     if (!modality || (Array.isArray(modality) && modality.length === 0) || modality === '') {
         return res.status(400).json({ error: 'Por favor, selecione pelo menos uma modalidade de contratação para realizar a busca.' });
     }
 
-    // A API agora espera uma string separada por vírgulas, ex: "5,6,7"
     const modalityCodes = (modality as string).split(',');
 
     const today = new Date();
     const pastDate = new Date();
     pastDate.setDate(today.getDate() - 30);
 
-    // Criar uma função para buscar os dados de uma única modalidade
     const fetchBidsForModality = async (modalityCode: string) => {
       const params = new URLSearchParams();
       params.append('dataPublicacaoPncpInicial', getYYYYMMDD(pastDate));
       params.append('dataPublicacaoPncpFinal', getYYYYMMDD(today));
       params.append('pagina', page as string);
-      
-      // Adiciona o código da modalidade para esta requisição específica
       params.append('codigoModalidade', modalityCode);
       
-      // Lógica de localização (UF ou Cidade)
       if (city && city !== 'all') {
         params.append('unidadeOrgaoCodigoIbge', city as string);
       } else if (uf && uf !== 'all') {
@@ -64,48 +59,49 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.log(`Disparando busca para modalidade ${modalityCode}: ${url}`);
 
       const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
-
       if (!response.ok) {
-        // Se falhar, loga o erro mas não quebra a execução para as outras modalidades
         console.error(`Erro ao buscar modalidade ${modalityCode}. Status: ${response.status}`);
-        return null; // Retorna nulo para indicar falha
+        return null;
       }
       return response.json();
     };
 
-    // Criar um array de promessas, uma para cada modalidade selecionada
     const promises = modalityCodes.map(code => fetchBidsForModality(code));
-
-    // Executar todas as promessas em paralelo e esperar os resultados
     const results = await Promise.allSettled(promises);
 
     let allBids: any[] = [];
     let totalAggregatedResults = 0;
     let maxTotalPages = 0;
 
-    results.forEach((result, index) => {
+    results.forEach((result) => {
       if (result.status === 'fulfilled' && result.value) {
         const data = result.value;
-        const bidsFromResult = data.resultado || [];
-        allBids = [...allBids, ...bidsFromResult];
-        
+        allBids.push(...(data.resultado || []));
         totalAggregatedResults += data.totalRegistros || 0;
         if ((data.totalPaginas || 0) > maxTotalPages) {
-            maxTotalPages = data.totalPaginas;
+          maxTotalPages = data.totalPaginas;
         }
-      } else if (result.status === 'rejected') {
-        console.error(`A requisição para a modalidade ${modalityCodes[index]} falhou:`, result.reason);
       }
     });
-    
-    // Ordenar os resultados consolidados por data de publicação (mais recente primeiro)
-    allBids.sort((a, b) => new Date(b.dataPublicacaoPncp).getTime() - new Date(a.dataPublicacaoPncp).getTime());
 
-    const mappedData = allBids.map(mapBidData);
+    // --- LÓGICA DE FILTRO POR PALAVRA-CHAVE NO BACKEND ---
+    let filteredBids = allBids;
+    if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
+        const lowercasedKeyword = keyword.trim().toLowerCase();
+        filteredBids = allBids.filter(bid =>
+            (bid.objetoCompra && bid.objetoCompra.toLowerCase().includes(lowercasedKeyword)) ||
+            (bid.orgaoEntidadeRazaoSocial && bid.orgaoEntidadeRazaoSocial.toLowerCase().includes(lowercasedKeyword))
+        );
+    }
+    
+    // Ordenar os resultados finais por data de publicação
+    filteredBids.sort((a, b) => new Date(b.dataPublicacaoPncp).getTime() - new Date(a.dataPublicacaoPncp).getTime());
+
+    const mappedData = filteredBids.map(mapBidData);
 
     return res.status(200).json({
       data: mappedData,
-      total: totalAggregatedResults,
+      total: totalAggregatedResults, // Total de resultados ANTES do filtro de palavra-chave
       totalPages: maxTotalPages > 0 ? maxTotalPages : 1,
     });
 
