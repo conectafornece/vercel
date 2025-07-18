@@ -3,24 +3,6 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 // Endpoint de publicadas para filtrar por data de publicação
 const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao";
 
-// Atualize modalityMapping com todas:
-const modalityMapping: { [key: string]: string } = {
-  pregao_eletronico: '6',
-  pregao_presencial: '7',
-  concorrencia_eletronica: '4',
-  concorrencia_presencial: '5',
-  concurso: '3',
-  leilao_eletronico: '1',
-  leilao_presencial: '13',
-  dialogo_competitivo: '2',
-  dispensa: '8',
-  dispensa_de_licitacao: '8', // Para matcher nomes completos
-  inexigibilidade: '9',
-  manifestacao_interesse: '10',
-  pre_qualificacao: '11',
-  credenciamento: '12',
-};
-
 // Lista de siglas válidas de UF para validação (baseado no IBGE)
 const validUFs = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
 
@@ -53,14 +35,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { keyword, modality, uf, city, page = '1', cityName } = req.query; // Adicione cityName para filtro manual (envie o nome da cidade do frontend)
-
-    // Normalize modality para lowercase e replace espaços por underscores
-    let normalizedModality = typeof modality === 'string' ? modality.toLowerCase().replace(/\s+/g, '_') : 'all';
+    const { keyword, modality, uf, city, page = '1', cityName } = req.query;
 
     // Exija pelo menos um filtro válido (exceto keyword, que filtramos manualmente)
     if (
-      (normalizedModality === 'all') &&
+      (!modality || modality === 'all') &&
       (!uf || uf === 'all') &&
       (!city || city === 'all') &&
       (!keyword || keyword === '')
@@ -79,14 +58,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     params.append('dataInicial', getYYYYMMDD(pastDate));
     params.append('dataFinal', getYYYYMMDD(today));
 
-    // Modalidade: Use o normalized e fallback para 'all'
-    if (normalizedModality !== 'all' && modalityMapping[normalizedModality]) {
-      params.append('codigoModalidadeContratacao', modalityMapping[normalizedModality]);
-    } else if (normalizedModality === 'all') {
-      params.append('codigoModalidadeContratacao', '6'); // Fallback: Pregão Eletrônico (comum; ajuste se preferir outra)
-    } else {
-      return res.status(400).json({ error: 'Modalidade inválida ou não informada (obrigatória).' });
-    }
+    // Modalidade: Use diretamente o código enviado do frontend
+    const modValue = typeof modality === 'string' && modality !== 'all' ? modality : '6'; // Fallback for 'all'
+    params.append('codigoModalidadeContratacao', modValue);
 
     // UF: Extraia apenas a sigla de 2 letras e valide
     let normalizedUf = typeof uf === 'string' && uf !== 'all' ? uf.toUpperCase().trim().split(' ')[0].slice(0, 2) : null;
