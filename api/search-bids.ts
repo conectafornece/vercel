@@ -67,7 +67,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const params = new URLSearchParams();
     params.append('pagina', Array.isArray(page) ? page[0] : page);
-    params.append('tamanhoPagina', '10'); // Ajustado para 10 resultados por página, como solicitado
+    params.append('tamanhoPagina', '10'); // De 10 em 10, como solicitado
 
     // Data final: hoje + 30 dias (sem dataInicial, não suportado)
     const futureDate = new Date();
@@ -114,7 +114,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Filtro manual para cidade se cityName enviado (envie o label 'Jacareí' do frontend como cityName)
     if (cityName && typeof cityName === 'string' && cityName !== 'all') {
       const lowerCityName = cityName.toLowerCase();
-      filteredData = filteredData.filter((bid: any) => bid.unidadeOrgao.municipioNome?.toLowerCase() === lowerCityName); // Use === para match exato
+      filteredData = filteredData.filter((bid: any) => bid.unidadeOrgao.municipioNome?.toLowerCase().includes(lowerCityName)); // Use includes para match partial
     }
 
     // Filtre por keyword no lado do servidor (já que API não suporta)
@@ -132,7 +132,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       data: mappedData,
       total: filteredData.length, // Use o total filtrado (não o da API, pois filtramos)
-      totalPages: Math.ceil(filteredData.length / 10) // Ajuste com tamanhoPagina=10
+      totalPages: Math.ceil(filteredData.length / 10) // Ajuste com tamanhoPagina
     });
 
   } catch (error: any) {
