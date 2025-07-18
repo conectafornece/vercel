@@ -1,21 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// URL base da API Compras.gov.br para contratos (dados a partir de 2021)
 const API_BASE_URL = "https://compras.dados.gov.br/contratos/v1/contratos.json";
-
-// Mapeamento de modalidades (códigos da API Compras.gov.br para modalidade_licitacao)
-const modalityMapping: { [key: string]: string } = {
-  pregao_eletronico: '6',
-  pregao_presencial: '7',
-  concorrencia_eletronica: '4',
-  concorrencia_presencial: '5',
-  concurso: '3',
-  leilao: '1',
-  dialogo_competitivo: '2',
-  dispensa_de_licitacao: '8',
-  inexigibilidade: '9',
-  credenciamento: '12',
-};
 
 // Mapeia os dados da API para o formato esperado pelo frontend
 const mapBidData = (bid: any) => ({
@@ -35,7 +20,6 @@ function getYYYYMMDD(date: Date): string {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Configurações de CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -46,36 +30,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const { modality, uf, city, page = '1', keyword } = req.query;
-    const pageSize = 10;  // Simula 10 por página (API retorna até 500)
+    const pageSize = 10;
     const offset = (parseInt(page as string) - 1) * pageSize;
 
     const params = new URLSearchParams();
     
-    const today = new Date();
-    const pastDate = new Date();
-    pastDate.setDate(today.getDate() - 365);  // Ampliei para 365 dias para mais dados (ajuste se necessário)
-    
-    params.append('data_assinatura_min', getYYYYMMDD(pastDate));
-    params.append('data_assinatura_max', getYYYYMMDD(today));
+    // Opcional: Adicionar um intervalo de datas pode ajudar a evitar timeouts
+    // const today = new Date();
+    // const pastDate = new Date();
+    // pastDate.setDate(today.getDate() - 90);
+    // params.append('data_assinatura_min', getYYYYMMDD(pastDate));
+    // params.append('data_assinatura_max', getYYYYMMDD(today));
     
     params.append('offset', offset.toString());
 
+    // --- CORREÇÃO APLICADA AQUI ---
+    // O frontend já envia o código numérico correto (ex: '6').
+    // O mapeamento foi removido para evitar inconsistências.
     if (modality && typeof modality === 'string' && modality !== 'all') {
-      const modalityCode = modalityMapping[modality] || modality;
-      params.append('modalidade_licitacao', modalityCode);
+      params.append('modalidade_licitacao', modality);
     }
 
-    // Removido: uf_orgao e municipio_orgao (inválidos, causam 500)
-    // Nota: Se precisar filtrar por localização, use outro endpoint para obter UASG e adicione params.append('uasg', 'código1,código2')
+    if (uf && typeof uf === 'string' && uf !== 'all') {
+      params.append('uf_orgao', uf.toUpperCase().trim());
+    }
+    
+    // O código IBGE da cidade já é enviado corretamente pelo frontend
+    if (city && typeof city === 'string' && city !== 'all') {
+      params.append('municipio_orgao', city);
+    }
 
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
-      params.append('objeto_contrato', keyword.trim());
+      params.append('objeto', keyword.trim()); // O parâmetro para busca por palavra-chave é 'objeto'
     }
     
     const url = `${API_BASE_URL}?${params.toString()}`;
     console.log(`Fetching Compras.gov.br API with URL: ${url}`);
     
-    // Timeout de 30 segundos
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
@@ -85,26 +76,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`Erro na API Compras.gov.br: ${response.status} - ${url}`, errorText);
-      return res.status(response.status).json({ error: `Erro na API Compras.gov.br: ${errorText}` });
+      // Retornar a mensagem de erro da API pode ajudar a depurar
+      return res.status(response.status).json({ error: `Erro na API Compras.gov.br. Detalhes: ${errorText}` });
     }
 
     const rawData = await response.json();
-    let resultsData = rawData._embedded?.contratos || [];  // Estrutura HAL/HATEOAS típica para contratos
+    const resultsData = rawData._embedded?.contratos || [];
+    
+    // A API do Compras.gov.br retorna no máximo 500 resultados por consulta com offset.
+    // O total real não é fornecido, então a paginação precisa ser estimada.
+    const total = rawData.count || resultsData.length;
+    const totalPages = Math.ceil(total / pageSize);
 
-    // Slice para simular pageSize=10
-    resultsData = resultsData.slice(0, pageSize);
-
-    const mappedData = resultsData.map(mapBidData);
-
-    // Estima total (se <500, assume total = offset + len; caso contrário, indefinido)
-    const fetchedCount = rawData._embedded?.contratos?.length || 0;
-    const estimatedTotal = fetchedCount < 500 ? offset + fetchedCount : undefined;
-    const totalPagesForFrontend = estimatedTotal ? Math.ceil(estimatedTotal / pageSize) : undefined;
+    const mappedData = resultsData.slice(0, pageSize).map(mapBidData);
 
     return res.status(200).json({
       data: mappedData,
-      total: estimatedTotal || fetchedCount,
-      totalPages: totalPagesForFrontend || 1,
+      total: total,
+      totalPages: totalPages > 0 ? totalPages : 1,
     });
 
   } catch (error: any) {
