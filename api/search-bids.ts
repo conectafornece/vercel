@@ -68,18 +68,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     params.append('codigoModalidadeContratacao', modalityCode);
 
-    // LÓGICA DE FILTRO ATUALIZADA:
-    // A API do PNCP parece funcionar melhor quando enviamos tanto o estado (UF)
-    // quanto o município (codigoMunicipiolbge). Alteramos a lógica para enviar ambos.
+    const isCityValid = city && typeof city === 'string' && /^\d{7}$/.test(city);
 
-    // Adiciona o filtro de estado (UF) se ele for válido.
-    if (uf && typeof uf === 'string' && uf !== 'all') {
+    // LÓGICA DE FILTRO CORRIGIDA:
+    // Se uma cidade válida for fornecida, usamos APENAS o filtro de cidade.
+    // O filtro de UF é ignorado para evitar conflito na API do PNCP.
+    if (isCityValid) {
+        params.append('codigoMunicipiolbge', city as string);
+    } else if (uf && typeof uf === 'string' && uf !== 'all') {
+        // Se não houver cidade, usamos o filtro de estado.
         params.append('uf', uf.toUpperCase().trim());
-    }
-    
-    // Adiciona o filtro de cidade se o código IBGE for válido.
-    if (city && typeof city === 'string' && /^\d{7}$/.test(city)) {
-        params.append('codigoMunicipiolbge', city);
     }
     
     // Este endpoint não suporta busca por palavra-chave.
