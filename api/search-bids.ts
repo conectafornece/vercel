@@ -67,7 +67,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const params = new URLSearchParams();
     params.append('pagina', Array.isArray(page) ? page[0] : page);
-    params.append('tamanhoPagina', '10'); // De 10 em 10, como solicitado
+    params.append('tamanhoPagina', '10'); // De 10 em 10
 
     // Data final: hoje + 30 dias (sem dataInicial, não suportado)
     const futureDate = new Date();
@@ -86,8 +86,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Sigla de UF inválida. Use apenas 2 letras maiúsculas (ex.: SP).' });
     }
 
-    // Remova codigoMunicipiolbge para ampliar resultados e filtrar manual por cityName
-    // if (city && typeof city === 'string' && city !== 'all') { ... } // Comentado para teste
+    // Remova codigoMunicipiolbge para ampliar resultados
+    // if (city && typeof city === 'string' && city !== 'all') { ... } // Comentado
 
     const url = `${PNCP_BASE_URL}?${params.toString()}`;
     const response = await fetch(url, {
@@ -104,13 +104,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const rawData = await response.json();
     let filteredData = rawData.data || [];
-    console.log(`Resultados brutos da API: ${filteredData.length}`); // Log para depuração
 
     // Filtro manual para cidade se cityName enviado (envie o label 'Jacareí' do frontend como cityName)
     if (cityName && typeof cityName === 'string' && cityName !== 'all') {
       const lowerCityName = cityName.toLowerCase();
       filteredData = filteredData.filter((bid: any) => bid.unidadeOrgao.municipioNome?.toLowerCase().includes(lowerCityName)); // Use includes para match partial
     }
+
+    // Filtro para últimos 30 dias (manual, pois endpoint não suporta)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    filteredData = filteredData.filter((bid: any) => new Date(bid.dataPublicacaoPncp) >= thirtyDaysAgo);
 
     // Filtre por keyword no lado do servidor (já que API não suporta)
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
