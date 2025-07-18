@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Endpoint para propostas abertas
-const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta";
+// Endpoint para licitações publicadas (para incluir recentes)
+const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao";
 
 // Atualize modalityMapping com todas:
 const modalityMapping: { [key: string]: string } = {
@@ -67,12 +67,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const params = new URLSearchParams();
     params.append('pagina', Array.isArray(page) ? page[0] : page);
-    params.append('tamanhoPagina', '10'); // De 10 em 10
+    // Omita tamanhoPagina para default (~50)
 
-    // Data final: hoje + 30 dias (sem dataInicial, não suportado)
-    const futureDate = new Date();
-    futureDate.setDate(futureDate.getDate() + 30);
-    params.append('dataFinal', getYYYYMMDD(futureDate));
+    // Data inicial e final: últimos 30 dias
+    const today = new Date();
+    const pastDate = new Date(today);
+    pastDate.setDate(pastDate.getDate() - 30);
+    params.append('dataInicial', getYYYYMMDD(pastDate));
+    params.append('dataFinal', getYYYYMMDD(today));
 
     // Modalidade: Use diretamente o código enviado do frontend
     const modValue = typeof modality === 'string' && modality !== 'all' ? modality : '6'; // Fallback for 'all'
@@ -86,8 +88,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Sigla de UF inválida. Use apenas 2 letras maiúsculas (ex.: SP).' });
     }
 
-    // Remova codigoMunicipiolbge para ampliar resultados
-    // if (city && typeof city === 'string' && city !== 'all') { ... } // Comentado
+    if (city && typeof city === 'string' && city !== 'all') {
+      // Valide se código IBGE é 7 dígitos numéricos
+      if (/^\d{7}$/.test(city)) {
+        params.append('codigoMunicipiolbge', city);
+      } else {
+        return res.status(400).json({ error: 'Código IBGE da cidade inválido (deve ser 7 dígitos numéricos).' });
+      }
+    }
 
     const url = `${PNCP_BASE_URL}?${params.toString()}`;
     const response = await fetch(url, {
@@ -104,17 +112,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const rawData = await response.json();
     let filteredData = rawData.data || [];
+    console.log(`Resultados brutos da API: ${filteredData.length}`); // Log para depuração
 
     // Filtro manual para cidade se cityName enviado (envie o label 'Jacareí' do frontend como cityName)
     if (cityName && typeof cityName === 'string' && cityName !== 'all') {
       const lowerCityName = cityName.toLowerCase();
       filteredData = filteredData.filter((bid: any) => bid.unidadeOrgao.municipioNome?.toLowerCase().includes(lowerCityName)); // Use includes para match partial
     }
-
-    // Filtro para últimos 30 dias (manual, pois endpoint não suporta)
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    filteredData = filteredData.filter((bid: any) => new Date(bid.dataPublicacaoPncp) >= thirtyDaysAgo);
 
     // Filtre por keyword no lado do servidor (já que API não suporta)
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
@@ -131,7 +135,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       data: mappedData,
       total: filteredData.length, // Use o total filtrado (não o da API, pois filtramos)
-      totalPages: Math.ceil(filteredData.length / 10) // Ajuste com tamanhoPagina
+      totalPages: Math.ceil(filteredData.length / 10) // Ajuste com tamanhoPagina ~50 default, mas divida por 10 para paginação
     });
 
   } catch (error: any) {
