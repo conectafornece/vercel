@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Endpoint para consultar contratações publicadas, conforme o manual da API.
+// O endpoint de consulta de publicações.
 const PNCP_BASE_URL = "https://pncp.gov.br/pncp-consulta/v1/contratacoes/publicacao";
 
 // Mapeamento de modalidades para os códigos numéricos que a API do PNCP exige.
@@ -24,7 +24,6 @@ const mapBidData = (pncpBid: any) => ({
   orgao: pncpBid.orgaoEntidade?.razaoSocial || 'Não informado',
   modalidade: pncpBid.modalidadeNome || 'Não informada',
   data_publicacao: pncpBid.dataPublicacaoPncp,
-  // O link de detalhe é construído com o número de controle.
   link_oficial: `https://pncp.gov.br/app/contratacoes/${pncpBid.numeroControlePNCP}`,
   status: pncpBid.situacaoCompraNome || 'Não informado',
   fonte: 'PNCP',
@@ -53,39 +52,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const params = new URLSearchParams();
     
-    // PAGINAÇÃO: Fixo em 10 itens por página, conforme solicitado.
     params.append('pagina', Array.isArray(page) ? page[0] : page);
     params.append('tamanhoPagina', '10');
 
-    // PERÍODO: A API exige um período. Usamos os últimos 90 dias como padrão.
     const today = new Date();
     const pastDate = new Date();
     pastDate.setDate(today.getDate() - 90);
     params.append('dataInicial', getYYYYMMDD(pastDate));
     params.append('dataFinal', getYYYYMMDD(today));
 
-    // FILTRO DE MODALIDADE: Converte o nome da modalidade para o código exigido pela API.
-    // Se "todas" for selecionado, um código padrão é usado para satisfazer a API.
+    // Usa um código de modalidade padrão se nenhum for especificado, pois é um campo obrigatório.
     let modalityCode = '6'; // Pregão Eletrônico como fallback
     if (modality && typeof modality === 'string' && modality !== 'all') {
-      modalityCode = modalityMapping[modality] || modality; // Usa o código do mapping ou o valor recebido
+      modalityCode = modalityMapping[modality] || modality;
     }
     params.append('codigoModalidadeContratacao', modalityCode);
 
-    // FILTRO DE UF (Estado)
     if (uf && typeof uf === 'string' && uf !== 'all') {
       params.append('uf', uf.toUpperCase().trim());
     }
     
-    // FILTRO DE MUNICÍPIO (Cidade): Usa o código IBGE
-    if (city && typeof city === 'string' && city !== 'all') {
-      if (/^\d{7}$/.test(city)) {
+    // SOLUÇÃO CORRETA: A API agora espera receber o código IBGE de 7 dígitos para a cidade.
+    if (city && typeof city === 'string' && /^\d{7}$/.test(city)) {
         params.append('codigoMunicipiolbge', city);
-      }
     }
     
-    // O endpoint de 'contratacoes/publicacao' não suporta 'palavraChave'.
-    // A filtragem por palavra-chave teria que ser feita no frontend após receber os dados.
+    // Este endpoint não suporta busca por palavra-chave.
+    // A filtragem por 'keyword' precisaria ser feita no frontend.
 
     const url = `${PNCP_BASE_URL}?${params.toString()}`;
     
@@ -99,9 +92,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const rawData = await response.json();
     
+    // REMOVIDO: A filtragem manual de cidade não é mais necessária.
     const mappedData = (rawData.data || []).map(mapBidData);
 
-    // RETORNO PARA O FRONTEND: Inclui os dados da paginação.
     return res.status(200).json({
       data: mappedData,
       total: rawData.totalRegistros || 0,
