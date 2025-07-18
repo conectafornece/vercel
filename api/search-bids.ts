@@ -53,7 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { keyword, modality, uf, city, page = '1' } = req.query;
+    const { keyword, modality, uf, city, page = '1', cityName } = req.query; // Adicione cityName para filtro manual (envie o nome da cidade do frontend)
 
     // Normalize modality para lowercase e replace espaços por underscores
     let normalizedModality = typeof modality === 'string' ? modality.toLowerCase().replace(/\s+/g, '_') : 'all';
@@ -120,6 +120,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const rawData = await response.json();
     let filteredData = rawData.data || [];
+
+    // Filtro manual para cidade se cityName enviado (envie o label 'Jacareí' do frontend como cityName)
+    if (cityName && typeof cityName === 'string' && cityName !== 'all') {
+      const lowerCityName = cityName.toLowerCase();
+      filteredData = filteredData.filter((bid: any) => bid.unidadeOrgao.municipioNome?.toLowerCase().includes(lowerCityName));
+    }
 
     // Filtre por keyword no lado do servidor (já que API não suporta)
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
