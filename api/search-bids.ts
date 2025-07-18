@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Endpoint for open proposals (use this; switch to 'publicacao' for published bids if needed)
-const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta";
+// Troque para endpoint de publicadas para filtrar por data de publicação
+const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao";
 
 // Atualize modalityMapping com todas:
 const modalityMapping: { [key: string]: string } = {
@@ -72,10 +72,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     params.append('pagina', Array.isArray(page) ? page[0] : page);
     params.append('tamanhoPagina', '50'); // Aumente para 50 (máx 500) para mais dados por chamada; equilibre com performance
 
-    // Data final: hoje + 30 dias para capturar propostas abertas futuras
-    const futureDate = new Date();
-    futureDate.setDate(futureDate.getDate() + 30);
-    params.append('dataFinal', getYYYYMMDD(futureDate));
+    // Data inicial e final: últimos 30 dias para evitar antigas
+    const today = new Date();
+    const pastDate = new Date(today);
+    pastDate.setDate(pastDate.getDate() - 30);
+    params.append('dataInicial', getYYYYMMDD(pastDate));
+    params.append('dataFinal', getYYYYMMDD(today));
 
     // Modalidade: Use o normalized e fallback para 'all'
     if (normalizedModality !== 'all' && modalityMapping[normalizedModality]) {
@@ -86,7 +88,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Modalidade inválida ou não informada (obrigatória).' });
     }
 
-    // UF: Extraia apenas a sigla de 2 letras (ex.: de 'SP - São Paulo' vira 'SP') e valide
+    // UF: Extraia apenas a sigla de 2 letras e valide
     let normalizedUf = typeof uf === 'string' && uf !== 'all' ? uf.toUpperCase().trim().split(' ')[0].slice(0, 2) : null;
     if (normalizedUf && validUFs.includes(normalizedUf)) {
       params.append('uf', normalizedUf);
@@ -95,7 +97,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (city && typeof city === 'string' && city !== 'all') {
-      params.append('codigoMunicipiolbge', city); // Deve ser código IBGE numérico
+      // Valide se código IBGE é 7 dígitos numéricos
+      if (/^\d{7}$/.test(city)) {
+        params.append('codigoMunicipiolbge', city);
+      } else {
+        return res.status(400).json({ error: 'Código IBGE da cidade inválido (deve ser 7 dígitos numéricos).' });
+      }
     }
 
     const url = `${PNCP_BASE_URL}?${params.toString()}`;
