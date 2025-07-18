@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// O endpoint de consulta de publicações.
+// O endpoint correto para consulta de publicações, que aceita os filtros.
 const PNCP_BASE_URL = "https://pncp.gov.br/pncp-consulta/v1/contratacoes/publicacao";
 
 // Mapeamento de modalidades para os códigos numéricos que a API do PNCP exige.
@@ -61,7 +61,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     params.append('dataInicial', getYYYYMMDD(pastDate));
     params.append('dataFinal', getYYYYMMDD(today));
 
-    // Usa um código de modalidade padrão se nenhum for especificado, pois é um campo obrigatório.
+    // A API exige um código de modalidade. Usamos um padrão se nenhum for enviado.
     let modalityCode = '6'; // Pregão Eletrônico como fallback
     if (modality && typeof modality === 'string' && modality !== 'all') {
       modalityCode = modalityMapping[modality] || modality;
@@ -72,7 +72,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       params.append('uf', uf.toUpperCase().trim());
     }
     
-    // SOLUÇÃO CORRETA: A API agora espera receber o código IBGE de 7 dígitos para a cidade.
+    // A API espera o código IBGE de 7 dígitos para a cidade, que o frontend agora envia.
     if (city && typeof city === 'string' && /^\d{7}$/.test(city)) {
         params.append('codigoMunicipiolbge', city);
     }
@@ -92,7 +92,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const rawData = await response.json();
     
-    // REMOVIDO: A filtragem manual de cidade não é mais necessária.
     const mappedData = (rawData.data || []).map(mapBidData);
 
     return res.status(200).json({
