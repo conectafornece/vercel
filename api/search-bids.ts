@@ -3,7 +3,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 // Endpoint for open proposals (use this; switch to 'publicacao' for published bids if needed)
 const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta";
 
-// Mapping expandido com variações para evitar mismatches
+// Atualize modalityMapping com todas:
 const modalityMapping: { [key: string]: string } = {
   pregao_eletronico: '6',
   pregao_presencial: '7',
@@ -14,7 +14,7 @@ const modalityMapping: { [key: string]: string } = {
   leilao_presencial: '13',
   dialogo_competitivo: '2',
   dispensa: '8',
-  dispensa_de_licitacao: '8', // Adicionado para corresponder ao dropdown
+  dispensa_de_licitacao: '8', // Para matcher nomes completos
   inexigibilidade: '9',
   manifestacao_interesse: '10',
   pre_qualificacao: '11',
@@ -69,8 +69,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     params.append('pagina', Array.isArray(page) ? page[0] : page);
     params.append('tamanhoPagina', '50'); // Aumente para 50 (máx 500) para mais dados por chamada; equilibre com performance
 
-    // Data final: hoje + 30 dias para capturar propostas abertas futuras (data atual: 18/07/2025)
-    const futureDate = new Date('2025-07-18');
+    // Data final: hoje + 30 dias para capturar propostas abertas futuras
+    const futureDate = new Date();
     futureDate.setDate(futureDate.getDate() + 30);
     params.append('dataFinal', getYYYYMMDD(futureDate));
 
@@ -83,9 +83,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Modalidade inválida ou não informada (obrigatória).' });
     }
 
-    if (uf && typeof uf === 'string' && uf !== 'all') {
-      params.append('uf', uf.toUpperCase());
+    // UF: Extraia apenas a sigla de 2 letras (ex.: de 'SP - São Paulo' vira 'SP')
+    let normalizedUf = typeof uf === 'string' && uf !== 'all' ? uf.toUpperCase().slice(0, 2) : null;
+    if (normalizedUf && normalizedUf.length === 2) {
+      params.append('uf', normalizedUf);
+    } else if (uf && uf !== 'all') {
+      return res.status(400).json({ error: 'Sigla de UF inválida. Use apenas 2 letras (ex.: SP).' });
     }
+
     if (city && typeof city === 'string' && city !== 'all') {
       params.append('codigoMunicipiolbge', city); // Deve ser código IBGE numérico
     }
