@@ -48,8 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    // CORREÇÃO: Lê tanto 'uf' como 'selectedUf' para compatibilidade.
-    const { keyword, modality, uf, selectedUf, city, page = '1' } = req.query;
+    const { keyword, modality, uf, city, page = '1' } = req.query;
 
     const params = new URLSearchParams();
     
@@ -69,15 +68,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     params.append('codigoModalidadeContratacao', modalityCode);
 
-    // CORREÇÃO: Usa o valor de 'uf' ou 'selectedUf', o que estiver presente.
-    const ufValue = uf || selectedUf;
-    if (ufValue && typeof ufValue === 'string' && ufValue !== 'all') {
-      params.append('uf', ufValue.toUpperCase().trim());
-    }
-    
-    // A API espera o código IBGE de 7 dígitos para a cidade.
-    if (city && typeof city === 'string' && /^\d{7}$/.test(city)) {
-        params.append('codigoMunicipiolbge', city);
+    const isCityValid = city && typeof city === 'string' && /^\d{7}$/.test(city);
+
+    // LÓGICA DE FILTRO ATUALIZADA:
+    // Se uma cidade válida for fornecida, usamos apenas o filtro de cidade.
+    // Caso contrário, usamos o filtro de estado (se fornecido).
+    if (isCityValid) {
+        params.append('codigoMunicipiolbge', city as string);
+    } else if (uf && typeof uf === 'string' && uf !== 'all') {
+        params.append('uf', uf.toUpperCase().trim());
     }
     
     // Este endpoint não suporta busca por palavra-chave.
