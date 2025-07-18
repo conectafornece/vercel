@@ -21,6 +21,9 @@ const modalityMapping: { [key: string]: string } = {
   credenciamento: '12',
 };
 
+// Lista de siglas válidas de UF para validação (baseado no IBGE)
+const validUFs = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
+
 // Mapeia os dados da API para o formato esperado
 const mapBidData = (pncpBid: any) => ({
   id_unico: pncpBid.numeroControlePNCP || pncpBid.numeroCompra,
@@ -83,12 +86,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Modalidade inválida ou não informada (obrigatória).' });
     }
 
-    // UF: Extraia apenas a sigla de 2 letras (ex.: de 'SP - São Paulo' vira 'SP')
-    let normalizedUf = typeof uf === 'string' && uf !== 'all' ? uf.toUpperCase().slice(0, 2) : null;
-    if (normalizedUf && normalizedUf.length === 2) {
+    // UF: Extraia apenas a sigla de 2 letras (ex.: de 'SP - São Paulo' vira 'SP') e valide
+    let normalizedUf = typeof uf === 'string' && uf !== 'all' ? uf.toUpperCase().trim().split(' ')[0].slice(0, 2) : null;
+    if (normalizedUf && validUFs.includes(normalizedUf)) {
       params.append('uf', normalizedUf);
     } else if (uf && uf !== 'all') {
-      return res.status(400).json({ error: 'Sigla de UF inválida. Use apenas 2 letras (ex.: SP).' });
+      return res.status(400).json({ error: 'Sigla de UF inválida. Use apenas 2 letras maiúsculas (ex.: SP).' });
     }
 
     if (city && typeof city === 'string' && city !== 'all') {
