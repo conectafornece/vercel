@@ -1,50 +1,41 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Endpoint correto para propostas abertas
-const PNCP_BASE_URL = "https://pncp.gov.br/pncp-consulta/v1/contratacoes/proposta";
+// Endpoint for open proposals (use this; switch to 'publicacao' for published bids if needed)
+const PNCP_BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta";
 
-// Mapeamento de modalidades para os códigos da API PNCP (contratação)
+// Mapeamento de modalidades (atualizado com códigos do manual; adicione mais se necessário)
 const modalityMapping: { [key: string]: string } = {
-  pregao: '5',
-  concorrencia: '6',
-  concurso: '7',
-  leilao: '8',
-  dialogo_competitivo: '9',
+  pregao_eletronico: '6',
+  pregao_presencial: '7',
+  concorrencia: '4',
+  concurso: '3',
+  leilao_eletronico: '1',
+  dialogo_competitivo: '2',
+  dispensa: '8',
+  inexigibilidade: '9',
+  // Adicione outros da tabela 5.2 do manual
 };
 
-// Mapeia os dados da API para o formato que o seu componente espera
+// Mapeia os dados da API para o formato esperado
 const mapBidData = (pncpBid: any) => ({
-  id_unico: pncpBid.numeroCompra,
+  id_unico: pncpBid.numeroControlePNCP || pncpBid.numeroCompra,
   titulo: pncpBid.objetoCompra,
-  orgao: pncpBid.orgaoEntidade?.razaoSocial || pncpBid.orgaoEntidade?.nome || 'Não informado',
-  modalidade: pncpBid.modalidadeContratacao?.nome || 'Não informada',
+  orgao: pncpBid.orgaoEntidade?.razaoSocial || 'Não informado',
+  modalidade: pncpBid.modalidadeNome || 'Não informada',
   data_publicacao: pncpBid.dataPublicacaoPncp,
-  link_oficial: pncpBid.idCompra
-    ? `https://pncp.gov.br/app/contratacoes/${pncpBid.idCompra}/detalhe`
-    : '',
-  status: pncpBid.situacaoCompra?.nome || 'Não informado',
+  link_oficial: `https://pncp.gov.br/app/editais?numeroControle=${pncpBid.numeroControlePNCP}`,
+  status: pncpBid.situacaoCompraNome || 'Não informado',
   fonte: 'PNCP',
 });
 
-function getTodayYYYYMMDD() {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  return `${yyyy}${mm}${dd}`;
-}
-
-function getNDaysAgoYYYYMMDD(days: number) {
-  const now = new Date();
-  now.setDate(now.getDate() - days);
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
+function getYYYYMMDD(date: Date): string {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
   return `${yyyy}${mm}${dd}`;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Headers CORS para permitir a comunicação com seu app
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -56,41 +47,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { keyword, modality, uf, city, page = '1' } = req.query;
 
-    // Só faz a requisição se pelo menos um filtro for preenchido
+    // Exija pelo menos um filtro válido (exceto keyword, que filtramos manualmente)
     if (
-      (!keyword || keyword === '') &&
       (!modality || modality === 'all') &&
       (!uf || uf === 'all') &&
-      (!city || city === 'all')
+      (!city || city === 'all') &&
+      (!keyword || keyword === '')
     ) {
-      return res.status(400).json({ error: 'Pelo menos um filtro deve ser preenchido para buscar licitações.' });
+      return res.status(400).json({ error: 'Pelo menos um filtro (modalidade, UF, cidade ou palavra-chave) deve ser preenchido.' });
     }
 
     const params = new URLSearchParams();
     params.append('pagina', Array.isArray(page) ? page[0] : page);
-    params.append('tamanhoPagina', '10');
+    params.append('tamanhoPagina', '50'); // Aumente para 50 (máx 500) para mais dados por chamada; equilibre com performance
 
-    // Buscar dos últimos 30 dias até hoje
-    const today = getTodayYYYYMMDD();
-    const thirtyDaysAgo = getNDaysAgoYYYYMMDD(30);
-    params.append('dataInicial', thirtyDaysAgo);
-    params.append('dataFinal', today);
+    // Data final: hoje + 30 dias para capturar propostas abertas futuras
+    const futureDate = new Date();
+    futureDate.setDate(futureDate.getDate() + 30);
+    params.append('dataFinal', getYYYYMMDD(futureDate));
 
-    if (keyword && typeof keyword === 'string') {
-      params.append('palavraChave', keyword);
-    }
+    // Modalidade é obrigatória; se 'all', omita (teste se API permite; senão, defina default)
     if (modality && typeof modality === 'string' && modality !== 'all' && modalityMapping[modality]) {
       params.append('codigoModalidadeContratacao', modalityMapping[modality]);
+    } else if (modality === 'all') {
+      // Omita; se API erro, defina um default como '6' (Pregão Eletrônico, comum)
+      params.append('codigoModalidadeContratacao', '6'); // Default fallback
+    } else {
+      return res.status(400).json({ error: 'Modalidade inválida ou não informada (obrigatória).' });
     }
+
     if (uf && typeof uf === 'string' && uf !== 'all') {
-      params.append('codigoUf', uf);
+      params.append('uf', uf.toUpperCase());
     }
     if (city && typeof city === 'string' && city !== 'all') {
-      params.append('codigoMunicipio', city);
+      params.append('codigoMunicipiolbge', city); // Deve ser código IBGE numérico
     }
 
     const url = `${PNCP_BASE_URL}?${params.toString()}`;
-    
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -104,17 +97,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const rawData = await response.json();
-    
-    const mappedData = (rawData.data || []).map(mapBidData);
+    let filteredData = rawData.data || [];
+
+    // Filtre por keyword server-side (já que API não suporta)
+    if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
+      const lowerKeyword = keyword.toLowerCase();
+      filteredData = filteredData.filter((bid: any) =>
+        (bid.objetoCompra?.toLowerCase().includes(lowerKeyword) ||
+         bid.informacaoComplementar?.toLowerCase().includes(lowerKeyword))
+      );
+    }
+
+    // Mapeie os resultados filtrados
+    const mappedData = filteredData.map(mapBidData);
 
     return res.status(200).json({
-        data: mappedData,
-        total: rawData.totalRegistros || rawData.total || 0,
-        totalPages: rawData.totalPaginas || Math.ceil((rawData.totalRegistros || 0) / 10)
+      data: mappedData,
+      total: filteredData.length, // Use o total filtrado (não o da API, pois filtramos)
+      totalPages: Math.ceil(filteredData.length / 50) // Ajuste com tamanhoPagina
     });
 
   } catch (error: any) {
-    console.error("Erro interno na função serverless:", error);
+    console.error("Erro interno:", error);
     return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
   }
 }
