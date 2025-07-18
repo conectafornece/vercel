@@ -1,41 +1,25 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Endpoint para licitações publicadas (para incluir recentes, com dataInicial)
-const PNCP_BASE_URL = "https://pncp.gov.br/pncp-consulta/v1/contratacoes/publicacao"; // Ajustado para ambiente de teste
+// 1. VOLTAMOS PARA O ENDPOINT DE LICITAÇÕES, QUE SUPORTA OS FILTROS CORRETAMENTE
+const PNCP_BASE_URL = "https://pncp.gov.br/pncp-consulta/v1/licitacoes";
 
-// Atualize modalityMapping com todas:
-const modalityMapping: { [key: string]: string } = {
-  pregao_eletronico: '6',
-  pregao_presencial: '7',
-  concorrencia_eletronica: '4',
-  concorrencia_presencial: '5',
-  concurso: '3',
-  leilao_eletronico: '1',
-  leilao_presencial: '13',
-  dialogo_competitivo: '2',
-  dispensa: '8',
-  dispensa_de_licitacao: '8', // Para matcher nomes completos
-  inexigibilidade: '9',
-  manifestacao_interesse: '10',
-  pre_qualificacao: '11',
-  credenciamento: '12',
-};
-
-// Lista de siglas válidas de UF para validação (baseado no IBGE)
+// Lista de siglas de UF válidas para validação
 const validUFs = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
 
-// Mapeia os dados da API para o formato esperado
+// Mapeia os dados da API para o formato que seu frontend espera
 const mapBidData = (pncpBid: any) => ({
   id_unico: pncpBid.numeroControlePNCP || pncpBid.numeroCompra,
   titulo: pncpBid.objetoCompra,
   orgao: pncpBid.orgaoEntidade?.razaoSocial || 'Não informado',
-  modalidade: pncpBid.modalidadeNome || 'Não informada',
+  modalidade: pncpBid.modalidade?.nome || 'Não informada',
   data_publicacao: pncpBid.dataPublicacaoPncp,
-  link_oficial: `https://pncp.gov.br/app/editais?numeroControle=${pncpBid.numeroControlePNCP}`,
-  status: pncpBid.situacaoCompraNome || 'Não informado',
+  // Link correto para o detalhe da licitação/edital
+  link_oficial: `https://pncp.gov.br/app/editais/${pncpBid.id}/detalhe`,
+  status: pncpBid.situacaoCompra?.nome || 'Não informado',
   fonte: 'PNCP',
 });
 
+// Função para formatar data para YYYYMMDD
 function getYYYYMMDD(date: Date): string {
   const yyyy = date.getFullYear();
   const mm = String(date.getMonth() + 1).padStart(2, '0');
@@ -44,6 +28,7 @@ function getYYYYMMDD(date: Date): string {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Configurações de CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -53,56 +38,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { keyword, modality, uf, city, page = '1', cityName } = req.query;
-
-    // Exija pelo menos um filtro válido (exceto keyword, que filtramos manualmente)
-    if (
-      (!modality || modality === 'all') &&
-      (!uf || uf === 'all') &&
-      (!city || city === 'all') &&
-      (!keyword || keyword === '')
-    ) {
-      return res.status(400).json({ error: 'Pelo menos um filtro (modalidade, UF, cidade ou palavra-chave) deve ser preenchido.' });
-    }
+    const { keyword, modality, uf, city, page = '1' } = req.query;
 
     const params = new URLSearchParams();
+    
+    // 2. RE-ADICIONAMOS O TAMANHO DA PÁGINA, CORRIGINDO O ERRO
     params.append('pagina', Array.isArray(page) ? page[0] : page);
-    // Omitido tamanhoPagina para default, evitando erro
+    params.append('tamanhoPagina', '10');
 
-    // Data inicial e final: últimos 30 dias
+    // Define um período de busca padrão (últimos 90 dias)
     const today = new Date();
-    const pastDate = new Date(today);
-    pastDate.setDate(pastDate.getDate() - 30);
+    const pastDate = new Date();
+    pastDate.setDate(today.getDate() - 90);
     params.append('dataInicial', getYYYYMMDD(pastDate));
     params.append('dataFinal', getYYYYMMDD(today));
 
-    // Modalidade: Use diretamente o código enviado do frontend
-    const modValue = typeof modality === 'string' && modality !== 'all' ? modality : '6'; // Fallback for 'all'
-    params.append('codigoModalidadeContratacao', modValue);
-
-    // UF: Extraia apenas a sigla de 2 letras e valide
-    let normalizedUf = typeof uf === 'string' && uf !== 'all' ? uf.toUpperCase().trim().split(' ')[0].slice(0, 2) : null;
-    if (normalizedUf && validUFs.includes(normalizedUf)) {
-      params.append('uf', normalizedUf);
-    } else if (uf && uf !== 'all') {
-      return res.status(400).json({ error: 'Sigla de UF inválida. Use apenas 2 letras maiúsculas (ex.: SP).' });
+    // 3. AGORA A API FILTRA A PALAVRA-CHAVE DIRETAMENTE (MAIS EFICIENTE)
+    if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
+      params.append('palavraChave', keyword);
     }
 
+    // Filtro de Modalidade (se enviado)
+    if (modality && typeof modality === 'string' && modality !== 'all') {
+        // A API de licitações parece aceitar o nome direto, não o código
+        params.append('modalidade', modality);
+    }
+
+    // Filtro de UF (com validação)
+    if (uf && typeof uf === 'string' && uf !== 'all') {
+      const normalizedUf = uf.toUpperCase().trim();
+      if (validUFs.includes(normalizedUf)) {
+        params.append('uf', normalizedUf);
+      }
+    }
+    
+    // Filtro de Município (código IBGE)
     if (city && typeof city === 'string' && city !== 'all') {
-      // Valide se código IBGE é 7 dígitos numéricos
       if (/^\d{7}$/.test(city)) {
-        params.append('codigoMunicipiolbge', city);
-      } else {
-        return res.status(400).json({ error: 'Código IBGE da cidade inválido (deve ser 7 dígitos numéricos).' });
+        params.append('codigoMunicipio', city);
       }
     }
 
     const url = `${PNCP_BASE_URL}?${params.toString()}`;
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      }
-    });
+    
+    const response = await fetch(url);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -111,34 +90,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const rawData = await response.json();
-    let filteredData = rawData.data || [];
-
-    // Filtro manual para cidade se cityName enviado (envie o label 'Jacareí' do frontend como cityName)
-    if (cityName && typeof cityName === 'string' && cityName !== 'all') {
-      const lowerCityName = cityName.toLowerCase();
-      filteredData = filteredData.filter((bid: any) => bid.unidadeOrgao.municipioNome?.toLowerCase().includes(lowerCityName)); // Use includes para match partial
-    }
-
-    // Filtre por keyword no lado do servidor (já que API não suporta)
-    if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
-      const lowerKeyword = keyword.toLowerCase();
-      filteredData = filteredData.filter((bid: any) =>
-        (bid.objetoCompra?.toLowerCase().includes(lowerKeyword) ||
-         bid.informacaoComplementar?.toLowerCase().includes(lowerKeyword))
-      );
-    }
-
-    // Mapeie os resultados filtrados
-    const mappedData = filteredData.map(mapBidData);
+    
+    // 4. NÃO PRECISAMOS MAIS FILTRAR MANUALMENTE, A API JÁ FEZ O TRABALHO
+    const mappedData = (rawData.data || []).map(mapBidData);
 
     return res.status(200).json({
       data: mappedData,
-      total: filteredData.length, // Use o total filtrado (não o da API, pois filtramos)
-      totalPages: Math.ceil(filteredData.length / 10) // Ajuste com tamanhoPagina
+      total: rawData.total, // Usamos o total que a API nos dá
+      totalPages: rawData.totalPaginas,
     });
 
   } catch (error: any) {
-    console.error("Erro interno na função Vercel:", error.message, error.stack); // Mais logging para depuração
+    console.error("Erro interno na função Vercel:", error.message);
     return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
   }
 }
