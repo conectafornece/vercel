@@ -32,11 +32,17 @@ const fetchPageForModality = async (modalityCode: string, page: number, basePara
     params.append('codigoModalidadeContratacao', modalityCode);
     
     const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
-    // O console.log foi removido para não poluir o log com dezenas de chamadas
-    // console.log(`Buscando modalidade ${modalityCode}, página ${page}`);
+    
+    // ===================================================================
+    // LOG RESTAURADO AQUI
+    // ===================================================================
+    console.log(`Buscando: Mod. ${modalityCode}, Pág. ${page}, URL: ${url}`);
     
     const response = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { 'Accept': 'application/json' } });
-    if (!response.ok) return null;
+    if (!response.ok) {
+        console.error(`Erro na API para Mod. ${modalityCode}, Pág. ${page}. Status: ${response.status}`);
+        return null;
+    }
     const responseBody = await response.text();
     if (!responseBody) return null;
     return JSON.parse(responseBody);
@@ -71,7 +77,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       baseParams.append('uf', uf as string);
     }
 
-    // Etapa 1: Buscar a primeira página de cada modalidade para descobrir o total de páginas
     const initialPromises = modalityCodes.map(code => fetchPageForModality(code, 1, baseParams));
     const initialResults = await Promise.allSettled(initialPromises);
 
@@ -79,17 +84,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let totalAggregatedResults = 0;
     const subsequentPagePromises = [];
 
-    for (const result of initialResults) {
+    for (const [index, result] of initialResults.entries()) {
       if (result.status === 'fulfilled' && result.value) {
         const data = result.value;
-        allBids.push(...(data.data || []));
+        const bidsFromResult = data.data || [];
+        allBids.push(...bidsFromResult);
         totalAggregatedResults += data.totalRegistros || 0;
         
         const totalPages = data.totalPaginas || 0;
-        const modalityCode = new URLSearchParams(result.value.config?.url).get('codigoModalidadeContratacao');
+        const modalityCode = modalityCodes[index];
 
-        // Se houver mais páginas, cria promessas para buscá-las, até o nosso limite
-        if (totalPages > 1 && modalityCode) {
+        if (totalPages > 1) {
           const pagesToFetch = Math.min(totalPages, MAX_PAGES_TO_FETCH);
           for (let i = 2; i <= pagesToFetch; i++) {
             subsequentPagePromises.push(fetchPageForModality(modalityCode, i, baseParams));
@@ -98,7 +103,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Etapa 2: Executar as buscas das páginas adicionais em paralelo
     if (subsequentPagePromises.length > 0) {
         console.log(`Buscando ${subsequentPagePromises.length} páginas adicionais...`);
         const subsequentResults = await Promise.allSettled(subsequentPagePromises);
@@ -109,7 +113,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
     }
     
-    // Etapa 3: Filtrar a lista agregada pela palavra-chave
+    console.log(`Total de ${allBids.length} licitações recebidas da API antes do filtro de palavra-chave.`);
+
     let filteredBids = allBids;
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
         const lowercasedKeyword = keyword.trim().toLowerCase();
@@ -119,9 +124,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         );
     }
     
+    console.log(`Total de ${filteredBids.length} licitações após aplicar o filtro "${keyword}".`);
+    
     filteredBids.sort((a, b) => new Date(b.dataPublicacaoPncp).getTime() - new Date(a.dataPublicacaoPncp).getTime());
 
-    // Paginação no lado do servidor sobre o resultado final
     const finalPage = parseInt(page as string, 10);
     const itemsPerPage = 10;
     const paginatedItems = filteredBids.slice((finalPage - 1) * itemsPerPage, finalPage * itemsPerPage);
@@ -130,8 +136,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({
       data: mappedData,
-      total: totalAggregatedResults, // Total na fonte, antes do filtro de keyword
-      totalPages: Math.ceil(filteredBids.length / itemsPerPage), // Total de páginas após o filtro
+      total: totalAggregatedResults,
+      totalPages: Math.ceil(filteredBids.length / itemsPerPage) || 1,
     });
 
   } catch (error: any) {
