@@ -110,6 +110,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
   } catch (error: any) {
-    // ... (bloco catch)
+    if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+      console.error("Timeout na API Compras.gov.br ou na função Vercel");
+      return res.status(504).json({ error: 'A busca demorou demais para responder (Timeout). Tente ser mais específico com os filtros.' });
+    }
+    console.error("Erro interno na função Vercel:", error.message);
+    return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
   }
 }
+
