@@ -2,40 +2,42 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao';
 
+// ===================================================================
+// INÍCIO DA CORREÇÃO: Mapeamento de dados mais seguro
+// ===================================================================
 const mapBidData = (contratacao: any) => ({
   id_unico: contratacao.id,
-  titulo: contratacao.objeto,
-  orgao: contratacao.orgaoEntidade.razaoSocial,
-  modalidade: contratacao.modalidade.nome,
+  titulo: contratacao.objeto || 'Objeto não informado',
+
+  // Verifica se 'orgaoEntidade' existe antes de acessar 'razaoSocial'
+  orgao: contratacao.orgaoEntidade ? contratacao.orgaoEntidade.razaoSocial : 'Órgão não informado',
+  
+  // Verifica se 'modalidade' existe antes de acessar 'nome'
+  modalidade: contratacao.modalidade ? contratacao.modalidade.nome : 'Modalidade não informada',
+  
   data_publicacao: contratacao.dataPublicacaoPncp,
   link_oficial: `https://www.gov.br/pncp/pt-br/contrato/-/contratos/${contratacao.numeroControlePncp}`,
-  status: contratacao.situacao.nome,
-  municipio: contratacao.unidadeOrgao.municipioNome,
-  municipio_codigo_ibge: contratacao.unidadeOrgao.codigoIbge,
-  uf: contratacao.unidadeOrgao.ufSigla,
+  
+  // Verifica se 'situacao' existe antes de acessar 'nome'
+  status: contratacao.situacao ? contratacao.situacao.nome : 'Situação não informada',
+
+  // Verifica se 'unidadeOrgao' existe antes de acessar os detalhes
+  municipio: contratacao.unidadeOrgao ? contratacao.unidadeOrgao.municipioNome : 'Município não informado',
+  municipio_codigo_ibge: contratacao.unidadeOrgao ? contratacao.unidadeOrgao.codigoIbge : null,
+  uf: contratacao.unidadeOrgao ? contratacao.unidadeOrgao.ufSigla : 'UF não informada',
+  
   fonte: 'PNCP (Consulta)',
 });
+// ===================================================================
+// FIM DA CORREÇÃO
+// ===================================================================
 
-// ===================================================================
-// INÍCIO DA CORREÇÃO 1: Nova função para formatar a data
-// ===================================================================
-/**
- * Formata um objeto Date para o formato yyyyMMdd exigido pela API do PNCP.
- * @param date O objeto Date a ser formatado.
- * @returns A data como uma string no formato 'yyyyMMdd'.
- */
 function formatDateToYYYYMMDD(date: Date): string {
   const year = date.getFullYear();
-  // getMonth() é 0-indexed (0-11), então adicionamos 1.
-  // padStart garante que o mês e o dia tenham sempre 2 dígitos (ex: 07).
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
-  
   return `${year}${month}${day}`;
 }
-// ===================================================================
-// FIM DA CORREÇÃO 1
-// ===================================================================
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -51,20 +53,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const params = new URLSearchParams();
     
-    // --- Parâmetros de data ---
     const today = new Date();
     const pastDate = new Date();
-    // ===================================================================
-    // INÍCIO DA CORREÇÃO 2: Período de busca estendido para 60 dias
-    // ===================================================================
     pastDate.setDate(today.getDate() - 60);
     
-    // Usa a nova função para formatar as datas corretamente
     params.append('dataInicial', formatDateToYYYYMMDD(pastDate));
     params.append('dataFinal', formatDateToYYYYMMDD(today));
-    // ===================================================================
-    // FIM DA CORREÇÃO 2
-    // ===================================================================
 
     params.append('pagina', page as string);
     params.append('tamanhoPagina', '10');
