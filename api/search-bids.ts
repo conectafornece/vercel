@@ -2,14 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/proposta';
 
-// ===================================================================
-// INÍCIO DA CORREÇÃO: Lista de modalidades correta
-// ===================================================================
-// Lista completa e correta das modalidades que a busca "Todas" irá abranger.
 const ALL_MODALITY_CODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '12', '13'];
-// ===================================================================
-// FIM DA CORREÇÃO
-// ===================================================================
 
 const mapBidData = (contratacao: any) => ({
   id_unico: contratacao.id,
@@ -44,65 +37,88 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { modality, uf, city, page = '1', keyword } = req.query;
 
-    const params = new URLSearchParams();
-    
-    const futureDate = new Date();
-    futureDate.setDate(new Date().getDate() + 60);
-    params.append('dataFinal', formatDateToYYYYMMDD(futureDate));
-
-    // O parâmetro 'tamanhoPagina' foi removido para compatibilidade.
-    // A API usará o tamanho padrão.
-    params.append('pagina', page as string);
-
-    if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
-      params.append('termoBusca', keyword.trim());
-    }
-
     let modalityCodes: string[];
+
     if (!modality || modality === 'all' || modality === '') {
       modalityCodes = ALL_MODALITY_CODES;
     } else {
       modalityCodes = (modality as string).split(',');
     }
-    modalityCodes.forEach(code => {
-        params.append('codigoModalidadeContratacao', code);
+
+    // Função interna para buscar os dados de UMA ÚNICA modalidade
+    const fetchBidsForModality = async (modalityCode: string) => {
+      const params = new URLSearchParams();
+      const futureDate = new Date();
+      futureDate.setDate(new Date().getDate() + 60);
+      
+      params.append('dataFinal', formatDateToYYYYMMDD(futureDate));
+      params.append('pagina', page as string);
+      
+      if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
+        params.append('termoBusca', keyword.trim());
+      }
+      
+      // Adiciona o código da modalidade para esta requisição específica
+      params.append('codigoModalidadeContratacao', modalityCode);
+      
+      if (city && city !== 'all') {
+        params.append('codigoMunicipioIbge', city as string);
+      } else if (uf && uf !== 'all') {
+        params.append('uf', uf as string);
+      }
+
+      const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
+      console.log(`Disparando busca para modalidade ${modalityCode}: ${url}`);
+
+      const response = await fetch(url, { signal: AbortSignal.timeout(30000), headers: { 'Accept': 'application/json' } });
+      if (!response.ok) {
+        console.error(`Erro ao buscar modalidade ${modalityCode}. Status: ${response.status}`);
+        return null;
+      }
+      
+      const responseBody = await response.text();
+      if (!responseBody) return null; // Retorna nulo se a resposta for vazia
+
+      return JSON.parse(responseBody);
+    };
+
+    // Cria um array de promessas, uma para cada modalidade selecionada
+    const promises = modalityCodes.map(code => fetchBidsForModality(code));
+
+    // Executa todas as buscas em paralelo e aguarda os resultados
+    const results = await Promise.allSettled(promises);
+
+    let allBids: any[] = [];
+    let totalAggregatedResults = 0;
+    let maxTotalPages = 0;
+
+    // Agrega os resultados de todas as buscas bem-sucedidas
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled' && result.value) {
+        const data = result.value;
+        allBids.push(...(data.data || []));
+        totalAggregatedResults += data.totalRegistros || 0;
+        if ((data.totalPaginas || 0) > maxTotalPages) {
+            maxTotalPages = data.totalPaginas;
+        }
+      } else if (result.status === 'rejected') {
+        console.error(`A requisição para a modalidade ${modalityCodes[index]} falhou:`, result.reason);
+      }
     });
+    
+    // Ordena os resultados consolidados por data de publicação
+    allBids.sort((a, b) => new Date(b.dataPublicacaoPncp).getTime() - new Date(a.dataPublicacaoPncp).getTime());
 
-    if (city && city !== 'all') {
-      params.append('codigoMunicipioIbge', city as string);
-    } else if (uf && uf !== 'all') {
-      params.append('uf', uf as string);
-    }
-
-    const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
-    console.log(`Buscando no endpoint /proposta: ${url}`);
-
-    const response = await fetch(url, {
-      signal: AbortSignal.timeout(30000),
-      headers: { 'Accept': 'application/json' }
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      return res.status(response.status).json({ error: `A API do PNCP retornou um erro. Detalhes: ${errorText}` });
-    }
-
-    const responseBody = await response.text();
-    if (!responseBody) {
-      return res.status(200).json({ data: [], total: 0, totalPages: 0 });
-    }
-
-    const rawData = JSON.parse(responseBody);
-    const resultsData = rawData.data || [];
-    const mappedData = resultsData.map(mapBidData);
+    const mappedData = allBids.map(mapBidData);
 
     return res.status(200).json({
       data: mappedData,
-      total: rawData.totalRegistros,
-      totalPages: rawData.totalPaginas,
+      total: totalAggregatedResults,
+      totalPages: maxTotalPages > 0 ? maxTotalPages : 1,
     });
 
   } catch (error: any) {
+    // ... (bloco catch)
     if (error.name === 'AbortError' || error.name === 'TimeoutError') {
       return res.status(504).json({ error: 'A busca demorou demais para responder (Timeout).' });
     }
