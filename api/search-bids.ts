@@ -1,26 +1,23 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-const API_BASE_URL = "https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarContratacoes_PNCP_14133";
+// O novo e correto endpoint da API de Consulta do PNCP
+const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao';
 
-const ALL_MODALITY_CODES = ['5', '6', '7', '4', '12', '20'];
-
+// Mapeia os dados da nova API para o formato que nosso frontend já espera
 const mapBidData = (contratacao: any) => ({
-  id_unico: contratacao.idCompra,
-  titulo: contratacao.objetoCompra,
-  orgao: contratacao.orgaoEntidadeRazaoSocial,
-  modalidade: contratacao.modalidadeNome,
+  id_unico: contratacao.id, // O ID agora vem do campo 'id'
+  titulo: contratacao.objeto,
+  orgao: contratacao.orgaoEntidade.razaoSocial,
+  modalidade: contratacao.modalidade.nome,
   data_publicacao: contratacao.dataPublicacaoPncp,
-  link_oficial: `https://www.gov.br/pncp/pt-br/contrato/-/contratos/${contratacao.numeroControlePNCP}`,
-  status: contratacao.situacaoCompraNomePncp,
-  municipio: contratacao.unidadeOrgaoMunicipioNome,
-  municipio_codigo_ibge: contratacao.unidadeOrgaoCodigolbge,
-  uf: contratacao.unidadeOrgaoUfSigla,
-  fonte: 'Compras.gov.br (PNCP)',
+  // A nova API nos dá a URL direta para o item
+  link_oficial: `https://www.gov.br/pncp/pt-br/contrato/-/contratos/${contratacao.numeroControlePncp}`,
+  status: contratacao.situacao.nome,
+  municipio: contratacao.unidadeOrgao.municipioNome,
+  municipio_codigo_ibge: contratacao.unidadeOrgao.codigoIbge,
+  uf: contratacao.unidadeOrgao.ufSigla,
+  fonte: 'PNCP (Consulta)',
 });
-
-function getYYYYMMDD(date: Date): string {
-  return date.toISOString().split('T')[0];
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -34,84 +31,71 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { modality, uf, city, page = '1', keyword } = req.query;
 
-    let modalityCodes: string[];
-
-    if (!modality || modality === 'all' || modality === '') {
-      modalityCodes = ALL_MODALITY_CODES;
-    } else {
-      modalityCodes = (modality as string).split(',');
-    }
-
+    const params = new URLSearchParams();
+    
+    // Parâmetros de data (últimos 30 dias)
     const today = new Date();
     const pastDate = new Date();
-    pastDate.setDate(today.getDate() - 60);
+    pastDate.setDate(today.getDate() - 30);
+    params.append('dataInicial', pastDate.toISOString().split('T')[0]);
+    params.append('dataFinal', today.toISOString().split('T')[0]);
 
-    const fetchBidsForModality = async (modalityCode: string) => {
-      const params = new URLSearchParams();
-      params.append('dataPublicacaoPncpInicial', getYYYYMMDD(pastDate));
-      params.append('dataPublicacaoPncpFinal', getYYYYMMDD(today));
-      params.append('pagina', page as string);
-      params.append('codigoModalidade', modalityCode);
-      
-      if (city && city !== 'all') {
-        params.append('unidadeOrgaoCodigoIbge', city as string);
-      } else if (uf && uf !== 'all') {
-        params.append('unidadeOrgaoUfSigla', uf as string);
-      }
+    // Parâmetro de página
+    params.append('pagina', page as string);
+    params.append('tamanhoPagina', '10'); // Definimos um tamanho de página padrão
 
-      const url = `${API_BASE_URL}?${params.toString()}`;
-      console.log(`Disparando busca para modalidade ${modalityCode}: ${url}`);
+    // --- NOVOS PARÂMETROS DA API PNCP ---
 
-      const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
-
-      if (!response.ok) {
-        console.error(`Erro ao buscar modalidade ${modalityCode}. Status: ${response.status}`);
-        return null;
-      }
-      return response.json();
-    };
-
-    const promises = modalityCodes.map(code => fetchBidsForModality(code));
-    const results = await Promise.allSettled(promises);
-
-    let allBids: any[] = [];
-    let totalAggregatedResults = 0;
-    let maxTotalPages = 0;
-
-    results.forEach((result) => {
-      if (result.status === 'fulfilled' && result.value) {
-        const data = result.value;
-        allBids.push(...(data.resultado || []));
-        totalAggregatedResults += data.totalRegistros || 0;
-        if ((data.totalPaginas || 0) > maxTotalPages) {
-            maxTotalPages = data.totalPaginas;
-        }
-      }
-    });
-    
-    // O filtro de palavra-chave é aplicado aqui, nos dados que a API nos entregou.
-    let filteredBids = allBids;
+    // Palavra-chave (termoBusca)
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
-        const lowercasedKeyword = keyword.trim().toLowerCase();
-        filteredBids = allBids.filter(bid =>
-            (bid.objetoCompra && bid.objetoCompra.toLowerCase().includes(lowercasedKeyword)) ||
-            (bid.orgaoEntidadeRazaoSocial && bid.orgaoEntidadeRazaoSocial.toLowerCase().includes(lowercasedKeyword))
-        );
+      params.append('termoBusca', keyword.trim());
     }
-    
-    filteredBids.sort((a, b) => new Date(b.dataPublicacaoPncp).getTime() - new Date(a.dataPublicacaoPncp).getTime());
 
-    const mappedData = filteredBids.map(mapBidData);
+    // Modalidades (a API aceita múltiplos valores)
+    if (modality && typeof modality === 'string' && modality !== 'all') {
+      const modalityCodes = modality.split(',');
+      modalityCodes.forEach(code => {
+        params.append('codigoModalidadeContratacao', code);
+      });
+    }
+
+    // Localização (a API usa UF e Código IBGE do Município)
+    if (city && city !== 'all') {
+      params.append('codigoIbgeMunicipio', city as string);
+    } else if (uf && uf !== 'all') {
+      params.append('uf', uf as string);
+    }
+
+    const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
+    console.log(`Buscando na API de Consulta do PNCP: ${url}`);
+
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(30000), // Timeout de 30 segundos
+      headers: { 'Accept': 'application/json' }
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Erro na API do PNCP: ${response.status} - ${url}`, errorText);
+      return res.status(response.status).json({ error: `A API do PNCP retornou um erro. Detalhes: ${errorText}` });
+    }
+
+    const rawData = await response.json();
+    
+    // A estrutura da resposta é diferente, os resultados estão em 'data'
+    const resultsData = rawData.data || [];
+    
+    const mappedData = resultsData.map(mapBidData);
 
     return res.status(200).json({
       data: mappedData,
-      total: totalAggregatedResults,
-      totalPages: maxTotalPages > 0 ? maxTotalPages : 1,
+      total: rawData.total,
+      totalPages: rawData.totalPaginas,
     });
 
   } catch (error: any) {
     if (error.name === 'AbortError' || error.name === 'TimeoutError') {
-      console.error("Timeout na API Compras.gov.br ou na função Vercel");
+      console.error("Timeout na API PNCP ou na função Vercel");
       return res.status(504).json({ error: 'A busca demorou demais para responder (Timeout). Tente ser mais específico com os filtros.' });
     }
     console.error("Erro interno na função Vercel:", error.message);
