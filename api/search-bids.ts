@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/proposta';
 const ALL_MODALITY_CODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '12', '13'];
-const MAX_PAGES_TO_FETCH = 20; // Limite de segurança para evitar timeouts
+const MAX_PAGES_TO_FETCH = 100; // Limite de segurança para evitar timeouts
 
 const mapBidData = (contratacao: any) => ({
   id_unico: contratacao.id,
