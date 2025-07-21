@@ -44,7 +44,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const today = new Date();
     const pastDate = new Date();
-    pastDate.setDate(today.getDate() - 30);
+    pastDate.setDate(today.getDate() - 60);
 
     const fetchBidsForModality = async (modalityCode: string) => {
       const params = new URLSearchParams();
