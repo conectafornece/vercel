@@ -45,7 +45,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       modalityCodes = (modality as string).split(',');
     }
 
-    // Função interna para buscar os dados de UMA ÚNICA modalidade
     const fetchBidsForModality = async (modalityCode: string) => {
       const params = new URLSearchParams();
       const futureDate = new Date();
@@ -53,8 +52,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       
       params.append('dataFinal', formatDateToYYYYMMDD(futureDate));
       params.append('pagina', page as string);
-      
-      // Adiciona o código da modalidade para esta requisição específica
       params.append('codigoModalidadeContratacao', modalityCode);
       
       if (city && city !== 'all') {
@@ -64,6 +61,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
+
+      // ===================================================================
+      // LINHA DE LOG RE-ADICIONADA AQUI
+      // ===================================================================
+      console.log(`Disparando busca para modalidade ${modalityCode}: ${url}`);
+      // ===================================================================
+
       const response = await fetch(url, { signal: AbortSignal.timeout(30000), headers: { 'Accept': 'application/json' } });
       
       if (!response.ok) return null;
@@ -90,7 +94,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     });
     
-    // FILTRO DA PALAVRA-CHAVE FEITO AQUI, NO NOSSO SERVIDOR
     let filteredBids = allBids;
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
         const lowercasedKeyword = keyword.trim().toLowerCase();
@@ -105,7 +108,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({
       data: mappedData,
-      total: totalAggregatedResults, // Total ANTES do filtro de palavra-chave
+      total: totalAggregatedResults,
       totalPages: maxTotalPages > 0 ? maxTotalPages : 1,
     });
 
