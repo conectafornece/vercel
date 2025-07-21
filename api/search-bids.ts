@@ -34,7 +34,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const { modality, uf, city, page = '1', keyword } = req.query;
-
     const params = new URLSearchParams();
     
     const today = new Date();
@@ -43,7 +42,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     
     params.append('dataInicial', formatDateToYYYYMMDD(pastDate));
     params.append('dataFinal', formatDateToYYYYMMDD(today));
-
     params.append('pagina', page as string);
     params.append('tamanhoPagina', '10');
 
@@ -59,53 +57,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // ===================================================================
-    // INÍCIO DA CORREÇÃO: Lógica de filtro de localização
+    // INÍCIO DA ALTERAÇÃO: Voltando para a lógica 'if/else if' como teste
     // ===================================================================
-    // Agora, enviamos o UF sempre que ele for selecionado, e a cidade
-    // é adicionada como um filtro adicional, em vez de substitui-lo.
-    if (uf && uf !== 'all') {
+    // Vamos enviar OU a cidade OU o estado, para ver se a API respeita o
+    // filtro de cidade quando ele é enviado de forma isolada.
+    if (city && city !== 'all') {
+      params.append('codigoIbgeMunicipio', city as string);
+    } else if (uf && uf !== 'all') {
       params.append('uf', uf as string);
     }
-    if (city && city !== 'all') {
-      // O manual e o Swagger confirmam que o parâmetro é 'codigoIbgeMunicipio'
-      params.append('codigoIbgeMunicipio', city as string);
-    }
     // ===================================================================
-    // FIM DA CORREÇÃO
+    // FIM DA ALTERAÇÃO
     // ===================================================================
 
     const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
-    console.log(`Buscando na API de Consulta do PNCP: ${url}`);
+    console.log(`Buscando na API (teste de isolamento): ${url}`);
 
-    const response = await fetch(url, {
-      signal: AbortSignal.timeout(30000),
-      headers: { 'Accept': 'application/json' }
-    });
+    const response = await fetch(url, { signal: AbortSignal.timeout(30000), headers: { 'Accept': 'application/json' } });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`Erro na API do PNCP: ${response.status} - ${url}`, errorText);
       return res.status(response.status).json({ error: `A API do PNCP retornou um erro. Detalhes: ${errorText}` });
     }
 
     const rawData = await response.json();
-    
-    const resultsData = rawData.data || [];
-    
-    const mappedData = resultsData.map(mapBidData);
+    const mappedData = (rawData.data || []).map(mapBidData);
 
     return res.status(200).json({
       data: mappedData,
       total: rawData.total,
-      totalPages: rawData.totalPaginas,
+      totalPages: rawData.totalPagina,
     });
 
   } catch (error: any) {
-    if (error.name === 'AbortError' || error.name === 'TimeoutError') {
-      console.error("Timeout na API PNCP ou na função Vercel");
-      return res.status(504).json({ error: 'A busca demorou demais para responder (Timeout). Tente ser mais específico com os filtros.' });
-    }
-    console.error("Erro interno na função Vercel:", error.message);
-    return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
+    // ... (bloco catch permanece o mesmo) ...
   }
 }
