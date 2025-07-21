@@ -41,16 +41,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     futureDate.setDate(new Date().getDate() + 60);
     params.append('dataFinal', formatDateToYYYYMMDD(futureDate));
 
-    params.append('pagina', page as string);
-
-    // ===================================================================
-    // INÍCIO DA CORREÇÃO: Linha removida
-    // ===================================================================
-    // A linha abaixo estava causando o erro, pois a API do PNCP não lida bem com este parâmetro.
-    // params.append('tamanhoPagina', '10'); 
-    // ===================================================================
-    // FIM DA CORREÇÃO
-    // ===================================================================
+    // O parâmetro 'tamanhoPagina' foi removido em uma etapa anterior e permanece removido.
 
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
       params.append('termoBusca', keyword.trim());
@@ -72,6 +63,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } else if (uf && uf !== 'all') {
       params.append('uf', uf as string);
     }
+    
+    // ===================================================================
+    // INÍCIO DA CORREÇÃO: Parâmetro 'pagina' movido para o final
+    // ===================================================================
+    // Para replicar a estrutura da URL que funciona, o parâmetro 'pagina'
+    // será o último a ser adicionado.
+    params.append('pagina', page as string);
+    // ===================================================================
+    // FIM DA CORREÇÃO
+    // ===================================================================
 
     const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
     console.log(`Buscando no endpoint /proposta: ${url}`);
