@@ -2,6 +2,15 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/proposta';
 
+// ===================================================================
+// INÍCIO DA CORREÇÃO: Lista de modalidades correta
+// ===================================================================
+// Lista completa e correta das modalidades que a busca "Todas" irá abranger.
+const ALL_MODALITY_CODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '12', '13'];
+// ===================================================================
+// FIM DA CORREÇÃO
+// ===================================================================
+
 const mapBidData = (contratacao: any) => ({
   id_unico: contratacao.id,
   titulo: contratacao.objetoCompra || 'Objeto não informado',
@@ -41,13 +50,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     futureDate.setDate(new Date().getDate() + 60);
     params.append('dataFinal', formatDateToYYYYMMDD(futureDate));
 
-    // O parâmetro 'tamanhoPagina' foi removido em uma etapa anterior e permanece removido.
+    // O parâmetro 'tamanhoPagina' foi removido para compatibilidade.
+    // A API usará o tamanho padrão.
+    params.append('pagina', page as string);
 
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
       params.append('termoBusca', keyword.trim());
     }
 
-    const ALL_MODALITY_CODES = ['1', '4', '28', '8', '5', '6'];
     let modalityCodes: string[];
     if (!modality || modality === 'all' || modality === '') {
       modalityCodes = ALL_MODALITY_CODES;
@@ -63,16 +73,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } else if (uf && uf !== 'all') {
       params.append('uf', uf as string);
     }
-    
-    // ===================================================================
-    // INÍCIO DA CORREÇÃO: Parâmetro 'pagina' movido para o final
-    // ===================================================================
-    // Para replicar a estrutura da URL que funciona, o parâmetro 'pagina'
-    // será o último a ser adicionado.
-    params.append('pagina', page as string);
-    // ===================================================================
-    // FIM DA CORREÇÃO
-    // ===================================================================
 
     const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
     console.log(`Buscando no endpoint /proposta: ${url}`);
