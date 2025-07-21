@@ -2,35 +2,19 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao';
 
-// ===================================================================
-// INÍCIO DA CORREÇÃO: Mapeamento de dados mais seguro
-// ===================================================================
 const mapBidData = (contratacao: any) => ({
   id_unico: contratacao.id,
   titulo: contratacao.objeto || 'Objeto não informado',
-
-  // Verifica se 'orgaoEntidade' existe antes de acessar 'razaoSocial'
   orgao: contratacao.orgaoEntidade ? contratacao.orgaoEntidade.razaoSocial : 'Órgão não informado',
-  
-  // Verifica se 'modalidade' existe antes de acessar 'nome'
   modalidade: contratacao.modalidade ? contratacao.modalidade.nome : 'Modalidade não informada',
-  
   data_publicacao: contratacao.dataPublicacaoPncp,
   link_oficial: `https://www.gov.br/pncp/pt-br/contrato/-/contratos/${contratacao.numeroControlePncp}`,
-  
-  // Verifica se 'situacao' existe antes de acessar 'nome'
   status: contratacao.situacao ? contratacao.situacao.nome : 'Situação não informada',
-
-  // Verifica se 'unidadeOrgao' existe antes de acessar os detalhes
   municipio: contratacao.unidadeOrgao ? contratacao.unidadeOrgao.municipioNome : 'Município não informado',
   municipio_codigo_ibge: contratacao.unidadeOrgao ? contratacao.unidadeOrgao.codigoIbge : null,
   uf: contratacao.unidadeOrgao ? contratacao.unidadeOrgao.ufSigla : 'UF não informada',
-  
   fonte: 'PNCP (Consulta)',
 });
-// ===================================================================
-// FIM DA CORREÇÃO
-// ===================================================================
 
 function formatDateToYYYYMMDD(date: Date): string {
   const year = date.getFullYear();
@@ -74,11 +58,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    if (city && city !== 'all') {
-      params.append('codigoIbgeMunicipio', city as string);
-    } else if (uf && uf !== 'all') {
+    // ===================================================================
+    // INÍCIO DA CORREÇÃO: Lógica de filtro de localização
+    // ===================================================================
+    // Agora, enviamos o UF sempre que ele for selecionado, e a cidade
+    // é adicionada como um filtro adicional, em vez de substitui-lo.
+    if (uf && uf !== 'all') {
       params.append('uf', uf as string);
     }
+    if (city && city !== 'all') {
+      // O manual e o Swagger confirmam que o parâmetro é 'codigoIbgeMunicipio'
+      params.append('codigoIbgeMunicipio', city as string);
+    }
+    // ===================================================================
+    // FIM DA CORREÇÃO
+    // ===================================================================
 
     const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
     console.log(`Buscando na API de Consulta do PNCP: ${url}`);
