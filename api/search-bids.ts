@@ -1,9 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
+// Usando o endpoint de propostas ativas, que funciona com o filtro de cidade.
 const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/proposta';
-
-// Lista com os códigos de modalidade para quando "Todas" for selecionado
-const ALL_MODALITY_CODES = ['1', '4', '28', '8', '5', '6'];
 
 const mapBidData = (contratacao: any) => ({
   id_unico: contratacao.id,
@@ -40,11 +38,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const params = new URLSearchParams();
     
-    const today = new Date();
+    // ===================================================================
+    // INÍCIO DA CORREÇÃO: Lógica de data para o endpoint /proposta
+    // ===================================================================
+    // Este endpoint busca por propostas ativas, então olhamos para o futuro.
+    // Ele aceita APENAS o parâmetro 'dataFinal'.
     const futureDate = new Date();
-    futureDate.setDate(today.getDate() + 60);
+    futureDate.setDate(new Date().getDate() + 60); // Busca licitações ativas nos próximos 60 dias.
     
     params.append('dataFinal', formatDateToYYYYMMDD(futureDate));
+    // A linha que enviava 'dataInicial' foi removida.
+    // ===================================================================
+    // FIM DA CORREÇÃO
+    // ===================================================================
 
     params.append('pagina', page as string);
     params.append('tamanhoPagina', '10');
@@ -53,26 +59,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       params.append('termoBusca', keyword.trim());
     }
 
-    // ===================================================================
-    // INÍCIO DA CORREÇÃO: Garantir que a modalidade seja sempre enviada
-    // ===================================================================
+    // A API requer pelo menos uma modalidade, então garantimos isso.
+    const ALL_MODALITY_CODES = ['1', '4', '28', '8', '5', '6']; // E outros que você queira
     let modalityCodes: string[];
-
-    // Se o usuário selecionou "Todas as modalidades" (ou nenhuma), usamos nossa lista padrão.
-    // Caso contrário, usamos as que o usuário selecionou.
     if (!modality || modality === 'all' || modality === '') {
       modalityCodes = ALL_MODALITY_CODES;
     } else {
       modalityCodes = (modality as string).split(',');
     }
-
-    // Adiciona todos os códigos de modalidade necessários à requisição.
     modalityCodes.forEach(code => {
         params.append('codigoModalidadeContratacao', code);
     });
-    // ===================================================================
-    // FIM DA CORREÇÃO
-    // ===================================================================
 
     if (city && city !== 'all') {
       params.append('codigoMunicipioIbge', city as string);
@@ -109,14 +106,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
   } catch (error: any) {
-    // ... (bloco catch)
     if (error.name === 'AbortError' || error.name === 'TimeoutError') {
-      console.error("Timeout na API PNCP ou na função Vercel");
-      return res.status(504).json({ error: 'A busca demorou demais para responder (Timeout). Tente ser mais específico com os filtros.' });
+      return res.status(504).json({ error: 'A busca demorou demais para responder (Timeout).' });
     }
     if (error instanceof SyntaxError) {
-        console.error("Falha ao analisar a resposta da API como JSON.", error);
-        return res.status(502).json({ error: 'A API do governo retornou uma resposta inválida (não-JSON).' });
+        return res.status(502).json({ error: 'A API do governo retornou uma resposta inválida.' });
     }
     console.error("Erro interno na função Vercel:", error.message);
     return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
