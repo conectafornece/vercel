@@ -1,16 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// O novo e correto endpoint da API de Consulta do PNCP
 const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao';
 
-// Mapeia os dados da nova API para o formato que nosso frontend já espera
 const mapBidData = (contratacao: any) => ({
-  id_unico: contratacao.id, // O ID agora vem do campo 'id'
+  id_unico: contratacao.id,
   titulo: contratacao.objeto,
   orgao: contratacao.orgaoEntidade.razaoSocial,
   modalidade: contratacao.modalidade.nome,
   data_publicacao: contratacao.dataPublicacaoPncp,
-  // A nova API nos dá a URL direta para o item
   link_oficial: `https://www.gov.br/pncp/pt-br/contrato/-/contratos/${contratacao.numeroControlePncp}`,
   status: contratacao.situacao.nome,
   municipio: contratacao.unidadeOrgao.municipioNome,
@@ -18,6 +15,27 @@ const mapBidData = (contratacao: any) => ({
   uf: contratacao.unidadeOrgao.ufSigla,
   fonte: 'PNCP (Consulta)',
 });
+
+// ===================================================================
+// INÍCIO DA CORREÇÃO 1: Nova função para formatar a data
+// ===================================================================
+/**
+ * Formata um objeto Date para o formato yyyyMMdd exigido pela API do PNCP.
+ * @param date O objeto Date a ser formatado.
+ * @returns A data como uma string no formato 'yyyyMMdd'.
+ */
+function formatDateToYYYYMMDD(date: Date): string {
+  const year = date.getFullYear();
+  // getMonth() é 0-indexed (0-11), então adicionamos 1.
+  // padStart garante que o mês e o dia tenham sempre 2 dígitos (ex: 07).
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  
+  return `${year}${month}${day}`;
+}
+// ===================================================================
+// FIM DA CORREÇÃO 1
+// ===================================================================
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -33,25 +51,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const params = new URLSearchParams();
     
-    // Parâmetros de data (últimos 30 dias)
+    // --- Parâmetros de data ---
     const today = new Date();
     const pastDate = new Date();
-    pastDate.setDate(today.getDate() - 30);
-    params.append('dataInicial', pastDate.toISOString().split('T')[0]);
-    params.append('dataFinal', today.toISOString().split('T')[0]);
+    // ===================================================================
+    // INÍCIO DA CORREÇÃO 2: Período de busca estendido para 60 dias
+    // ===================================================================
+    pastDate.setDate(today.getDate() - 60);
+    
+    // Usa a nova função para formatar as datas corretamente
+    params.append('dataInicial', formatDateToYYYYMMDD(pastDate));
+    params.append('dataFinal', formatDateToYYYYMMDD(today));
+    // ===================================================================
+    // FIM DA CORREÇÃO 2
+    // ===================================================================
 
-    // Parâmetro de página
     params.append('pagina', page as string);
-    params.append('tamanhoPagina', '10'); // Definimos um tamanho de página padrão
+    params.append('tamanhoPagina', '10');
 
-    // --- NOVOS PARÂMETROS DA API PNCP ---
-
-    // Palavra-chave (termoBusca)
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
       params.append('termoBusca', keyword.trim());
     }
 
-    // Modalidades (a API aceita múltiplos valores)
     if (modality && typeof modality === 'string' && modality !== 'all') {
       const modalityCodes = modality.split(',');
       modalityCodes.forEach(code => {
@@ -59,7 +80,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Localização (a API usa UF e Código IBGE do Município)
     if (city && city !== 'all') {
       params.append('codigoIbgeMunicipio', city as string);
     } else if (uf && uf !== 'all') {
@@ -70,7 +90,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log(`Buscando na API de Consulta do PNCP: ${url}`);
 
     const response = await fetch(url, {
-      signal: AbortSignal.timeout(30000), // Timeout de 30 segundos
+      signal: AbortSignal.timeout(30000),
       headers: { 'Accept': 'application/json' }
     });
 
@@ -82,7 +102,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const rawData = await response.json();
     
-    // A estrutura da resposta é diferente, os resultados estão em 'data'
     const resultsData = rawData.data || [];
     
     const mappedData = resultsData.map(mapBidData);
