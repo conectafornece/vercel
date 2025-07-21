@@ -1,6 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Usando o endpoint de propostas ativas, que funciona com o filtro de cidade.
 const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/proposta';
 
 const mapBidData = (contratacao: any) => ({
@@ -38,29 +37,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const params = new URLSearchParams();
     
-    // ===================================================================
-    // INÍCIO DA CORREÇÃO: Lógica de data para o endpoint /proposta
-    // ===================================================================
-    // Este endpoint busca por propostas ativas, então olhamos para o futuro.
-    // Ele aceita APENAS o parâmetro 'dataFinal'.
     const futureDate = new Date();
-    futureDate.setDate(new Date().getDate() + 60); // Busca licitações ativas nos próximos 60 dias.
-    
+    futureDate.setDate(new Date().getDate() + 60);
     params.append('dataFinal', formatDateToYYYYMMDD(futureDate));
-    // A linha que enviava 'dataInicial' foi removida.
+
+    params.append('pagina', page as string);
+
+    // ===================================================================
+    // INÍCIO DA CORREÇÃO: Linha removida
+    // ===================================================================
+    // A linha abaixo estava causando o erro, pois a API do PNCP não lida bem com este parâmetro.
+    // params.append('tamanhoPagina', '10'); 
     // ===================================================================
     // FIM DA CORREÇÃO
     // ===================================================================
-
-    params.append('pagina', page as string);
-    params.append('tamanhoPagina', '10');
 
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
       params.append('termoBusca', keyword.trim());
     }
 
-    // A API requer pelo menos uma modalidade, então garantimos isso.
-    const ALL_MODALITY_CODES = ['1', '4', '28', '8', '5', '6']; // E outros que você queira
+    const ALL_MODALITY_CODES = ['1', '4', '28', '8', '5', '6'];
     let modalityCodes: string[];
     if (!modality || modality === 'all' || modality === '') {
       modalityCodes = ALL_MODALITY_CODES;
