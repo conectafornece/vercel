@@ -122,6 +122,7 @@ const saveToSupabase = async (licitacoes: any[]) => {
       titulo: bid.objetoCompra || 'Objeto não informado',
       orgao: bid.orgaoEntidade?.razaoSocial || 'Órgão não informado',
       modalidade: bid.modalidadeNome || 'Modalidade não informada',
+      modalidade_codigo: bid.modalidadeId || null, // ← NOVO: Salvar código da modalidade
       data_publicacao: formatDate(bid.dataPublicacaoPncp),
       data_abertura_proposta: formatDate(bid.dataAberturaProposta),
       data_encerramento_proposta: formatDate(bid.dataEncerramentoProposta),
