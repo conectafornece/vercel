@@ -2,7 +2,9 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/proposta';
 const ALL_MODALITY_CODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '12', '13'];
-const MAX_PAGES_TO_FETCH = 100; // Limite de segurança para evitar timeouts
+const MAX_PAGES_TO_FETCH = 50; // Reduzido para evitar timeouts
+const DELAY_BETWEEN_REQUESTS = 100; // 100ms entre requisições
+const MAX_RETRIES = 3;
 
 const mapBidData = (contratacao: any) => ({
   id_unico: contratacao.id,
@@ -18,7 +20,6 @@ const mapBidData = (contratacao: any) => ({
   fonte: 'PNCP (Consulta Ativa)',
 });
 
-
 function formatDateToYYYYMMDD(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -26,43 +27,88 @@ function formatDateToYYYYMMDD(date: Date): string {
   return `${year}${month}${day}`;
 }
 
-// Função auxiliar para buscar uma única página de uma modalidade
-const fetchPageForModality = async (modalityCode: string, page: number, baseParams: URLSearchParams) => {
-    const params = new URLSearchParams(baseParams);
-    params.set('pagina', String(page));
-    params.append('codigoModalidadeContratacao', modalityCode);
-    
-    const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
-    
-    // ===================================================================
-    // LOG RESTAURADO AQUI
-    // ===================================================================
-    console.log(`Buscando: Mod. ${modalityCode}, Pág. ${page}, URL: ${url}`);
-    
-    const response = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { 'Accept': 'application/json' } });
-    if (!response.ok) {
-        console.error(`Erro na API para Mod. ${modalityCode}, Pág. ${page}. Status: ${response.status}`);
-        return null;
+// Função para adicionar delay entre requisições
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Função auxiliar com retry logic
+const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`Tentativa ${attempt} para: ${url}`);
+      
+      const response = await fetch(url, { 
+        signal: AbortSignal.timeout(8000), // Reduzido para 8s
+        headers: { 
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (compatible; PNCP-Client/1.0)'
+        } 
+      });
+      
+      if (response.ok) {
+        const responseBody = await response.text();
+        if (responseBody) {
+          return JSON.parse(responseBody);
+        }
+      } else if (response.status === 429) {
+        // Rate limit - esperar mais tempo
+        const waitTime = Math.pow(2, attempt) * 1000; // Backoff exponencial
+        console.log(`Rate limit detectado. Aguardando ${waitTime}ms antes da próxima tentativa...`);
+        await delay(waitTime);
+        continue;
+      }
+      
+      console.error(`Erro ${response.status} na tentativa ${attempt}`);
+      
+    } catch (error: any) {
+      console.error(`Erro na tentativa ${attempt}:`, error.message);
+      
+      if (attempt === retries) {
+        throw error;
+      }
+      
+      // Aguardar antes da próxima tentativa
+      await delay(1000 * attempt);
     }
-    const responseBody = await response.text();
-    if (!responseBody) return null;
-    return JSON.parse(responseBody);
+  }
+  
+  return null;
 };
 
+// Função auxiliar para buscar uma única página de uma modalidade
+const fetchPageForModality = async (modalityCode: string, page: number, baseParams: URLSearchParams) => {
+  const params = new URLSearchParams(baseParams);
+  params.set('pagina', String(page));
+  params.append('codigoModalidadeContratacao', modalityCode);
+  
+  const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
+  
+  // Aguardar antes da requisição para evitar rate limit
+  await delay(DELAY_BETWEEN_REQUESTS);
+  
+  return await fetchWithRetry(url);
+};
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') { return res.status(200).end(); }
+  if (req.method === 'OPTIONS') { 
+    return res.status(200).end(); 
+  }
 
   try {
     const { modality, uf, city, page = '1', keyword } = req.query;
 
     let modalityCodes: string[];
     if (!modality || modality === 'all' || modality === '') {
-      modalityCodes = ALL_MODALITY_CODES;
+      // Para buscas em estados inteiros, limitar modalidades para evitar timeout
+      if (uf && uf !== 'all' && (!city || city === 'all')) {
+        modalityCodes = ['1', '2', '3', '4', '5']; // Reduzir modalidades para estados
+        console.log('Busca em estado detectada - limitando modalidades para evitar timeout');
+      } else {
+        modalityCodes = ALL_MODALITY_CODES;
+      }
     } else {
       modalityCodes = (modality as string).split(',');
     }
@@ -78,51 +124,85 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       baseParams.append('uf', uf as string);
     }
 
-    const initialPromises = modalityCodes.map(code => fetchPageForModality(code, 1, baseParams));
-    const initialResults = await Promise.allSettled(initialPromises);
+    console.log(`Iniciando busca com ${modalityCodes.length} modalidades`);
 
+    // Buscar primeira página de cada modalidade com controle sequencial
     let allBids: any[] = [];
     let totalAggregatedResults = 0;
     const subsequentPagePromises = [];
 
-    for (const [index, result] of initialResults.entries()) {
-      if (result.status === 'fulfilled' && result.value) {
-        const data = result.value;
-        const bidsFromResult = data.data || [];
-        allBids.push(...bidsFromResult);
-        totalAggregatedResults += data.totalRegistros || 0;
+    // Processar modalidades sequencialmente para evitar rate limit
+    for (const modalityCode of modalityCodes) {
+      try {
+        console.log(`Processando modalidade ${modalityCode}...`);
         
-        const totalPages = data.totalPaginas || 0;
-        const modalityCode = modalityCodes[index];
+        const data = await fetchPageForModality(modalityCode, 1, baseParams);
+        
+        if (data) {
+          const bidsFromResult = data.data || [];
+          allBids.push(...bidsFromResult);
+          totalAggregatedResults += data.totalRegistros || 0;
+          
+          const totalPages = data.totalPaginas || 0;
+          console.log(`Modalidade ${modalityCode}: ${bidsFromResult.length} resultados, ${totalPages} páginas`);
 
-        if (totalPages > 1) {
-          const pagesToFetch = Math.min(totalPages, MAX_PAGES_TO_FETCH);
-          for (let i = 2; i <= pagesToFetch; i++) {
-            subsequentPagePromises.push(fetchPageForModality(modalityCode, i, baseParams));
+          // Limitar páginas adicionais para evitar timeout
+          if (totalPages > 1) {
+            const maxPages = uf && uf !== 'all' && (!city || city === 'all') ? 3 : MAX_PAGES_TO_FETCH;
+            const pagesToFetch = Math.min(totalPages, maxPages);
+            
+            for (let i = 2; i <= pagesToFetch; i++) {
+              subsequentPagePromises.push({modalityCode, page: i});
+            }
           }
         }
+      } catch (error) {
+        console.error(`Erro ao processar modalidade ${modalityCode}:`, error);
+        // Continuar com outras modalidades mesmo se uma falhar
       }
     }
 
+    // Processar páginas subsequentes em lotes pequenos
     if (subsequentPagePromises.length > 0) {
-        console.log(`Buscando ${subsequentPagePromises.length} páginas adicionais...`);
-        const subsequentResults = await Promise.allSettled(subsequentPagePromises);
-        for (const result of subsequentResults) {
-            if (result.status === 'fulfilled' && result.value) {
-                allBids.push(...(result.value.data || []));
-            }
+      console.log(`Processando ${subsequentPagePromises.length} páginas adicionais em lotes...`);
+      
+      const batchSize = 3; // Processar 3 páginas por vez
+      for (let i = 0; i < subsequentPagePromises.length; i += batchSize) {
+        const batch = subsequentPagePromises.slice(i, i + batchSize);
+        
+        const batchPromises = batch.map(async ({modalityCode, page}) => {
+          try {
+            return await fetchPageForModality(modalityCode, page, baseParams);
+          } catch (error) {
+            console.error(`Erro na página ${page} da modalidade ${modalityCode}:`, error);
+            return null;
+          }
+        });
+        
+        const batchResults = await Promise.allSettled(batchPromises);
+        
+        for (const result of batchResults) {
+          if (result.status === 'fulfilled' && result.value) {
+            allBids.push(...(result.value.data || []));
+          }
         }
+        
+        // Aguardar entre lotes
+        if (i + batchSize < subsequentPagePromises.length) {
+          await delay(200);
+        }
+      }
     }
     
     console.log(`Total de ${allBids.length} licitações recebidas da API antes do filtro de palavra-chave.`);
 
     let filteredBids = allBids;
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
-        const lowercasedKeyword = keyword.trim().toLowerCase();
-        filteredBids = allBids.filter(bid =>
-            (bid.objetoCompra && bid.objetoCompra.toLowerCase().includes(lowercasedKeyword)) ||
-            (bid.orgaoEntidade?.razaoSocial && bid.orgaoEntidade.razaoSocial.toLowerCase().includes(lowercasedKeyword))
-        );
+      const lowercasedKeyword = keyword.trim().toLowerCase();
+      filteredBids = allBids.filter(bid =>
+        (bid.objetoCompra && bid.objetoCompra.toLowerCase().includes(lowercasedKeyword)) ||
+        (bid.orgaoEntidade?.razaoSocial && bid.orgaoEntidade.razaoSocial.toLowerCase().includes(lowercasedKeyword))
+      );
     }
     
     console.log(`Total de ${filteredBids.length} licitações após aplicar o filtro "${keyword}".`);
@@ -139,14 +219,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       data: mappedData,
       total: totalAggregatedResults,
       totalPages: Math.ceil(filteredBids.length / itemsPerPage) || 1,
+      warning: uf && uf !== 'all' && (!city || city === 'all') ? 
+        'Busca em estado limitada a algumas modalidades para evitar timeout' : null
     });
 
   } catch (error: any) {
     if (error.name === 'AbortError' || error.name === 'TimeoutError') {
       console.error("Timeout na API Compras.gov.br ou na função Vercel");
-      return res.status(504).json({ error: 'A busca demorou demais para responder (Timeout). Tente ser mais específico com os filtros.' });
+      return res.status(504).json({ 
+        error: 'A busca demorou demais para responder. Tente buscar em uma cidade específica ou use filtros mais restritivos.',
+        suggestion: 'Para buscas em estados inteiros, considere filtrar por modalidade específica.'
+      });
     }
     console.error("Erro interno na função Vercel:", error.message);
-    return res.status(500).json({ error: error.message || 'Erro interno no servidor' });
+    return res.status(500).json({ 
+      error: error.message || 'Erro interno no servidor',
+      suggestion: 'Se o erro persistir, tente buscar em uma cidade específica.'
+    });
   }
 }
