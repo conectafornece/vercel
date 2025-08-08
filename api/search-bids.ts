@@ -1,50 +1,143 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { createClient } from '@supabase/supabase-js';
 
 const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/proposta';
 const ALL_MODALITY_CODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '12', '13'];
-const MAX_PAGES_TO_FETCH = 50; // Reduzido para evitar timeouts
-const DELAY_BETWEEN_REQUESTS = 100; // 100ms entre requisições
+const MAX_PAGES_TO_FETCH = 50;
+const DELAY_BETWEEN_REQUESTS = 100;
 const MAX_RETRIES = 3;
 
 // ===================================================================
-// SISTEMA DE CACHE SIMPLES EM MEMÓRIA
+// CONFIGURAÇÃO SUPABASE
 // ===================================================================
-const cache = new Map();
-const CACHE_TTL = 10 * 60 * 1000; // 10 minutos de cache
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_ANON_KEY!
+);
 
-const getCacheKey = (baseParams: URLSearchParams, modalityCodes: string[], keyword?: string) => {
-  const key = `${baseParams.toString()}_${modalityCodes.join(',')}_${keyword || ''}`;
-  return key;
+// ===================================================================
+// FUNÇÕES DE SUPABASE
+// ===================================================================
+
+// Gerar chave de cache para busca
+const generateCacheKey = (uf?: string, city?: string, keyword?: string, modality?: string) => {
+  return `${uf || 'all'}_${city || 'all'}_${keyword || 'none'}_${modality || 'all'}`;
 };
 
-const getCachedResult = (key: string) => {
-  const cached = cache.get(key);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    console.log('📦 Resultado encontrado no cache!');
-    return cached.data;
+// Buscar licitações no Supabase
+const searchInSupabase = async (uf?: string, city?: string, keyword?: string, page = 1) => {
+  console.log('🔍 Buscando no Supabase...');
+  
+  let query = supabase
+    .from('licitacoes')
+    .select('*')
+    .order('data_publicacao', { ascending: false });
+
+  // Filtros
+  if (uf && uf !== 'all') {
+    query = query.eq('uf', uf);
   }
   
-  // Remove cache expirado
-  if (cached) {
-    cache.delete(key);
+  if (city && city !== 'all') {
+    query = query.eq('municipio_codigo_ibge', city);
   }
   
-  return null;
+  if (keyword && keyword.trim() !== '') {
+    query = query.or(`titulo.ilike.%${keyword}%,orgao.ilike.%${keyword}%`);
+  }
+
+  // Paginação
+  const limit = 50; // Buscar mais do Supabase
+  const offset = (page - 1) * limit;
+  query = query.range(offset, offset + limit - 1);
+
+  const { data, error, count } = await query;
+  
+  if (error) {
+    console.error('❌ Erro no Supabase:', error);
+    return { data: [], count: 0 };
+  }
+
+  console.log(`✅ Encontradas ${data?.length || 0} licitações no Supabase`);
+  return { data: data || [], count: count || 0 };
 };
 
-const setCachedResult = (key: string, data: any) => {
-  // Limita o tamanho do cache para evitar consumo excessivo de memória
-  if (cache.size > 100) {
-    const firstKey = cache.keys().next().value;
-    cache.delete(firstKey);
-  }
+// Salvar licitações no Supabase
+const saveToSupabase = async (licitacoes: any[]) => {
+  if (!licitacoes.length) return { saved: 0, errors: 0 };
   
-  cache.set(key, { 
-    data, 
-    timestamp: Date.now(),
-    size: JSON.stringify(data).length 
-  });
-  console.log(`💾 Resultado salvo no cache (${cache.size} entradas)`);
+  console.log(`💾 Salvando ${licitacoes.length} licitações no Supabase...`);
+  
+  const licitacoesFormatadas = licitacoes.map(bid => ({
+    id_pncp: bid.id,
+    titulo: bid.objetoCompra || 'Objeto não informado',
+    orgao: bid.orgaoEntidade?.razaoSocial || 'Órgão não informado',
+    modalidade: bid.modalidadeNome || 'Modalidade não informada',
+    data_publicacao: bid.dataPublicacaoPncp ? new Date(bid.dataPublicacaoPncp).toISOString().split('T')[0] : null,
+    link_oficial: bid.linkSistemaOrigem || `https://pncp.gov.br/app/editais/${bid.orgaoEntidade?.cnpj}/${bid.anoCompra}/${bid.sequencialCompra}`,
+    status: bid.situacaoCompraNome || 'Status não informado',
+    municipio: bid.unidadeOrgao?.municipioNome || 'Município não informado',
+    municipio_codigo_ibge: bid.unidadeOrgao?.codigoIbge || null,
+    uf: bid.unidadeOrgao?.ufSigla || 'UF não informada',
+    dados_completos: bid
+  }));
+
+  let saved = 0;
+  let errors = 0;
+
+  // Salvar em lotes para evitar timeout
+  const batchSize = 50;
+  for (let i = 0; i < licitacoesFormatadas.length; i += batchSize) {
+    const batch = licitacoesFormatadas.slice(i, i + batchSize);
+    
+    const { error } = await supabase
+      .from('licitacoes')
+      .upsert(batch, { 
+        onConflict: 'id_pncp',
+        ignoreDuplicates: true 
+      });
+
+    if (error) {
+      console.error('❌ Erro ao salvar lote:', error);
+      errors += batch.length;
+    } else {
+      saved += batch.length;
+    }
+  }
+
+  console.log(`✅ Salvos: ${saved}, Erros: ${errors}`);
+  return { saved, errors };
+};
+
+// Verificar se precisa atualizar cache
+const needsRefresh = async (cacheKey: string) => {
+  const { data } = await supabase
+    .from('cache_buscas')
+    .select('ultima_atualizacao')
+    .eq('chave_busca', cacheKey)
+    .single();
+
+  if (!data) return true;
+
+  const agora = new Date();
+  const ultimaAtualizacao = new Date(data.ultima_atualizacao);
+  const diffHoras = (agora.getTime() - ultimaAtualizacao.getTime()) / (1000 * 60 * 60);
+
+  return diffHoras > 6; // Atualizar a cada 6 horas
+};
+
+// Atualizar cache de busca
+const updateCacheRecord = async (cacheKey: string, totalEncontrado: number, parametros: any) => {
+  await supabase
+    .from('cache_buscas')
+    .upsert({
+      chave_busca: cacheKey,
+      parametros,
+      total_encontrado: totalEncontrado,
+      ultima_atualizacao: new Date().toISOString()
+    }, {
+      onConflict: 'chave_busca'
+    });
 };
 
 const mapBidData = (contratacao: any) => ({
@@ -150,263 +243,168 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const { modality, uf, city, page = '1', keyword } = req.query;
+    const pageNum = parseInt(page as string, 10);
 
-    let modalityCodes: string[];
-    if (!modality || modality === 'all' || modality === '') {
-      // Para buscas em estados inteiros, limitar modalidades para evitar timeout
-      if (uf && uf !== 'all' && (!city || city === 'all')) {
-        modalityCodes = ['1', '2', '3', '4', '5']; // Reduzir modalidades para estados
-        console.log('Busca em estado detectada - limitando modalidades para evitar timeout');
+    console.log(`🚀 Iniciando busca híbrida: UF=${uf}, City=${city}, Keyword=${keyword}, Page=${page}`);
+
+    // ===================================================================
+    // ETAPA 1: BUSCAR NO SUPABASE PRIMEIRO
+    // ===================================================================
+    const supabaseResults = await searchInSupabase(
+      uf as string, 
+      city as string, 
+      keyword as string, 
+      pageNum
+    );
+
+    let allResults = supabaseResults.data.map(item => ({
+      id_unico: item.id_pncp,
+      titulo: item.titulo,
+      orgao: item.orgao,
+      modalidade: item.modalidade,
+      data_publicacao: item.data_publicacao,
+      link_oficial: item.link_oficial,
+      status: item.status,
+      municipio: item.municipio,
+      municipio_codigo_ibge: item.municipio_codigo_ibge,
+      uf: item.uf,
+      fonte: 'Supabase (Cache Local)',
+    }));
+
+    // ===================================================================
+    // ETAPA 2: VERIFICAR SE PRECISA BUSCAR NA API PNCP
+    // ===================================================================
+    const cacheKey = generateCacheKey(uf as string, city as string, keyword as string, modality as string);
+    const precisaAtualizar = await needsRefresh(cacheKey);
+
+    console.log(`📊 Supabase: ${allResults.length} resultados. Precisa atualizar: ${precisaAtualizar}`);
+
+    if (precisaAtualizar || allResults.length < 5) {
+      console.log('🔄 Buscando dados atualizados na API PNCP...');
+
+      // ===================================================================
+      // ETAPA 3: BUSCAR NA API PNCP (CÓDIGO ORIGINAL SIMPLIFICADO)
+      // ===================================================================
+      let modalityCodes: string[];
+      if (!modality || modality === 'all' || modality === '') {
+        modalityCodes = uf && uf !== 'all' && (!city || city === 'all') 
+          ? ['1', '2', '3', '4', '5'] 
+          : ALL_MODALITY_CODES;
       } else {
-        modalityCodes = ALL_MODALITY_CODES;
+        modalityCodes = (modality as string).split(',');
       }
-    } else {
-      modalityCodes = (modality as string).split(',');
-    }
 
-    const baseParams = new URLSearchParams();
-    
-    // ===================================================================
-    // FILTRO DE DATA INTELIGENTE - SEM LIMITE INICIAL PARA PALAVRA-CHAVE
-    // ===================================================================
-    const today = new Date();
-    const futureDate = new Date();
-    futureDate.setDate(today.getDate() + 60);
-    
-    // Para buscas em estados COM palavra-chave: NÃO limitar data inicial
-    if (uf && uf !== 'all' && (!city || city === 'all')) {
-      if (keyword && keyword.trim() !== '') {
-        console.log('🔍 Palavra-chave presente - buscando SEM limite de data inicial para máxima cobertura');
-        // Não adiciona dataInicial - busca em todo o histórico
-      } else {
+      const baseParams = new URLSearchParams();
+      const today = new Date();
+      const futureDate = new Date();
+      futureDate.setDate(today.getDate() + 60);
+      
+      if (uf && uf !== 'all' && (!city || city === 'all') && (!keyword || keyword.trim() === '')) {
         const startDate = new Date();
-        startDate.setDate(today.getDate() - 30); // Só limita se não houver palavra-chave
+        startDate.setDate(today.getDate() - 30);
         baseParams.append('dataInicial', formatDateToYYYYMMDD(startDate));
-        console.log('🗓️ Busca sem palavra-chave - limitando aos últimos 30 dias para otimizar');
       }
-    }
-    
-    baseParams.append('dataFinal', formatDateToYYYYMMDD(futureDate));
-
-    if (city && city !== 'all') {
-      baseParams.append('codigoMunicipioIbge', city as string);
-    } else if (uf && uf !== 'all') {
-      baseParams.append('uf', uf as string);
-    }
-
-    // ===================================================================
-    // VERIFICAR CACHE ANTES DE FAZER REQUISIÇÕES
-    // ===================================================================
-    const cacheKey = getCacheKey(baseParams, modalityCodes, keyword as string);
-    const cachedResult = getCachedResult(cacheKey);
-    
-    if (cachedResult) {
-      // Aplicar paginação no resultado do cache
-      const finalPage = parseInt(page as string, 10);
-      const itemsPerPage = 10;
-      const paginatedItems = cachedResult.filteredBids.slice((finalPage - 1) * itemsPerPage, finalPage * itemsPerPage);
       
-      return res.status(200).json({
-        data: paginatedItems.map(mapBidData),
-        total: cachedResult.totalAggregatedResults,
-        totalPages: Math.ceil(cachedResult.filteredBids.length / itemsPerPage) || 1,
-        cached: true, // Indica que veio do cache
-        warning: cachedResult.warning || null
-      });
-    }
+      baseParams.append('dataFinal', formatDateToYYYYMMDD(futureDate));
 
-    console.log(`Iniciando busca com ${modalityCodes.length} modalidades`);
+      if (city && city !== 'all') {
+        baseParams.append('codigoMunicipioIbge', city as string);
+      } else if (uf && uf !== 'all') {
+        baseParams.append('uf', uf as string);
+      }
 
-    // Buscar primeira página de cada modalidade com controle sequencial
-    let allBids: any[] = [];
-    let totalAggregatedResults = 0;
-    const subsequentPagePromises = [];
+      let pncpBids: any[] = [];
+      let totalFromPNCP = 0;
 
-    // Processar modalidades sequencialmente para evitar rate limit
-    let successfulRequests = 0;
-    let failedRequests = 0;
-    
-    for (const modalityCode of modalityCodes) {
-      try {
-        console.log(`🔄 Processando modalidade ${modalityCode}...`);
-        
-        const data = await fetchPageForModality(modalityCode, 1, baseParams);
-        
-        if (data) {
-          const bidsFromResult = data.data || [];
-          allBids.push(...bidsFromResult);
-          totalAggregatedResults += data.totalRegistros || 0;
-          successfulRequests++;
-          
-          const totalPages = data.totalPaginas || 0;
-          console.log(`✅ Modalidade ${modalityCode}: ${bidsFromResult.length} resultados página 1, ${totalPages} páginas totais`);
-
-          // ===================================================================
-          // ESTRATÉGIA MAIS AGRESSIVA PARA PALAVRA-CHAVE ESPECÍFICA
-          // ===================================================================
-          if (totalPages > 1) {
-            let maxPages;
+      // Buscar apenas primeiras páginas para não demorar muito
+      const maxModalidades = modalityCodes.slice(0, 3); // Limitar a 3 modalidades para ser mais rápido
+      
+      for (const modalityCode of maxModalidades) {
+        try {
+          const data = await fetchPageForModality(modalityCode, 1, baseParams);
+          if (data) {
+            pncpBids.push(...(data.data || []));
+            totalFromPNCP += data.totalRegistros || 0;
             
-            if (uf && uf !== 'all' && (!city || city === 'all')) {
-              // Para estados: buscar MUITO mais páginas se tivermos palavra-chave específica
-              if (keyword && keyword.trim() !== '') {
-                maxPages = Math.min(totalPages, 100); // Aumentado para 100 páginas com palavra-chave
-                console.log(`🔍 Palavra-chave "${keyword}" detectada - buscando até ${maxPages} páginas na modalidade ${modalityCode}`);
-              } else {
-                maxPages = Math.min(totalPages, 5); // Menos páginas sem palavra-chave
+            // Buscar mais algumas páginas se tiver palavra-chave
+            if (keyword && keyword.trim() !== '' && data.totalPaginas > 1) {
+              const maxPages = Math.min(data.totalPaginas, 5); // Máximo 5 páginas por modalidade
+              for (let i = 2; i <= maxPages; i++) {
+                const pageData = await fetchPageForModality(modalityCode, i, baseParams);
+                if (pageData) {
+                  pncpBids.push(...(pageData.data || []));
+                }
               }
-            } else {
-              maxPages = MAX_PAGES_TO_FETCH; // Para cidades, buscar todas as páginas
-            }
-            
-            const pagesToFetch = Math.min(totalPages, maxPages);
-            
-            for (let i = 2; i <= pagesToFetch; i++) {
-              subsequentPagePromises.push({modalityCode, page: i});
             }
           }
-        } else {
-          failedRequests++;
-          console.log(`❌ Falha na modalidade ${modalityCode} - dados nulos retornados`);
-        }
-      } catch (error) {
-        failedRequests++;
-        console.error(`💥 Erro ao processar modalidade ${modalityCode}:`, error);
-        // Continuar com outras modalidades mesmo se uma falhar
-      }
-    }
-    
-    console.log(`📊 Resumo primeira página: ${successfulRequests} sucessos, ${failedRequests} falhas de ${modalityCodes.length} modalidades`);
-
-    // Processar páginas subsequentes em lotes pequenos
-    if (subsequentPagePromises.length > 0) {
-      console.log(`📄 Processando ${subsequentPagePromises.length} páginas adicionais em lotes...`);
-      
-      // ===================================================================
-      // BATCHING DINÂMICO COM CONTADORES DE SUCESSO/FALHA
-      // ===================================================================
-      const batchSize = subsequentPagePromises.length > 50 ? 5 : 3; // Lotes maiores para muitas páginas
-      let batchSuccesses = 0;
-      let batchFailures = 0;
-      
-      for (let i = 0; i < subsequentPagePromises.length; i += batchSize) {
-        const batch = subsequentPagePromises.slice(i, i + batchSize);
-        console.log(`🔄 Processando lote ${Math.floor(i/batchSize) + 1}/${Math.ceil(subsequentPagePromises.length/batchSize)} (páginas ${i+1}-${Math.min(i+batchSize, subsequentPagePromises.length)})`);
-        
-        const batchPromises = batch.map(async ({modalityCode, page}) => {
-          try {
-            const result = await fetchPageForModality(modalityCode, page, baseParams);
-            if (result && result.data) {
-              return { success: true, data: result.data, modalityCode, page };
-            } else {
-              return { success: false, modalityCode, page, reason: 'dados nulos' };
-            }
-          } catch (error) {
-            return { success: false, modalityCode, page, reason: error.message };
-          }
-        });
-        
-        const batchResults = await Promise.allSettled(batchPromises);
-        
-        for (const result of batchResults) {
-          if (result.status === 'fulfilled') {
-            if (result.value.success) {
-              allBids.push(...result.value.data);
-              batchSuccesses++;
-            } else {
-              batchFailures++;
-              console.log(`❌ Falha na página ${result.value.page} da modalidade ${result.value.modalityCode}: ${result.value.reason}`);
-            }
-          } else {
-            batchFailures++;
-            console.log(`💥 Erro promise rejected:`, result.reason);
-          }
-        }
-        
-        // Aguardar entre lotes - menos tempo se há palavra-chave específica
-        if (i + batchSize < subsequentPagePromises.length) {
-          const waitTime = keyword && keyword.trim() !== '' ? 100 : 200;
-          await delay(waitTime);
+        } catch (error) {
+          console.error(`❌ Erro na modalidade ${modalityCode}:`, error);
         }
       }
-      
-      console.log(`📊 Resumo páginas adicionais: ${batchSuccesses} sucessos, ${batchFailures} falhas de ${subsequentPagePromises.length} páginas`);
-    }
-    
-    console.log(`Total de ${allBids.length} licitações recebidas da API antes do filtro de palavra-chave.`);
 
-    let filteredBids = allBids;
-    if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
-      const lowercasedKeyword = keyword.trim().toLowerCase();
-      
-      // ===================================================================
-      // FILTRO SUPER ABRANGENTE + DEBUG DETALHADO
-      // ===================================================================
-      console.log(`🔍 Procurando por "${keyword}" em ${allBids.length} licitações...`);
-      
-      filteredBids = allBids.filter((bid, index) => {
-        const searchFields = {
-          objetoCompra: bid.objetoCompra || '',
-          razaoSocial: bid.orgaoEntidade?.razaoSocial || '',
-          municipio: bid.unidadeOrgao?.municipioNome || '',
-          modalidade: bid.modalidadeNome || '',
-          situacao: bid.situacaoCompraNome || ''
-        };
-        
-        const searchText = Object.values(searchFields).join(' ').toLowerCase();
-        const hasKeyword = searchText.includes(lowercasedKeyword);
-        
-        // Log detalhado das primeiras 10 licitações para debug
-        if (index < 10) {
-          console.log(`📄 Licitação ${index + 1}:`);
-          console.log(`   Objeto: ${searchFields.objetoCompra.substring(0, 100)}...`);
-          console.log(`   Órgão: ${searchFields.razaoSocial}`);
-          console.log(`   Município: ${searchFields.municipio}`);
-          console.log(`   Modalidade: ${searchFields.modalidade}`);
-          console.log(`   Contém "${keyword}": ${hasKeyword ? '✅' : '❌'}`);
-        }
-        
-        return hasKeyword;
-      });
-      
-      console.log(`🔍 Filtro aplicado: "${keyword}"`);
-      console.log(`📊 Resultados por modalidade antes do filtro:`);
-      const modalityCounts = {};
-      allBids.forEach(bid => {
-        const modalidade = bid.modalidadeNome || 'Não informada';
-        modalityCounts[modalidade] = (modalityCounts[modalidade] || 0) + 1;
-      });
-      Object.entries(modalityCounts).forEach(([modalidade, count]) => {
-        console.log(`   ${modalidade}: ${count} licitações`);
-      });
-      
-      console.log(`📊 Resultados por município nas primeiras 50 licitações:`);
-      const municipioCounts = {};
-      allBids.slice(0, 50).forEach(bid => {
-        const municipio = bid.unidadeOrgao?.municipioNome || 'Não informado';
-        municipioCounts[municipio] = (municipioCounts[municipio] || 0) + 1;
-      });
-      Object.entries(municipioCounts).forEach(([municipio, count]) => {
-        console.log(`   ${municipio}: ${count} licitações`);
-      });
-    }
-    
-    console.log(`Total de ${filteredBids.length} licitações após aplicar o filtro "${keyword}".`);
-    
-    filteredBids.sort((a, b) => new Date(b.dataPublicacaoPncp).getTime() - new Date(a.dataPublicacaoPncp).getTime());
+      console.log(`📡 PNCP: ${pncpBids.length} resultados coletados`);
 
-    const warning = uf && uf !== 'all' && (!city || city === 'all') ? 
-      'Busca em estado limitada a algumas modalidades para evitar timeout' : null;
+      // ===================================================================
+      // ETAPA 4: SALVAR NOVOS DADOS NO SUPABASE
+      // ===================================================================
+      if (pncpBids.length > 0) {
+        await saveToSupabase(pncpBids);
+        await updateCacheRecord(cacheKey, totalFromPNCP, { uf, city, keyword, modality });
+        
+        // Adicionar resultados do PNCP aos do Supabase (removendo duplicatas)
+        const existingIds = new Set(allResults.map(r => r.id_unico));
+        const newResults = pncpBids
+          .filter(bid => !existingIds.has(bid.id))
+          .map(mapBidData);
+        
+        allResults = [...allResults, ...newResults];
+        console.log(`➕ Adicionados ${newResults.length} novos resultados`);
+      }
+    }
 
     // ===================================================================
-    // SALVAR NO CACHE ANTES DE RETORNAR
+    // ETAPA 5: FILTRAR E PAGINAR RESULTADOS
     // ===================================================================
-    const resultToCache = {
-      filteredBids,
-      totalAggregatedResults,
-      warning
-    };
-    setCachedResult(cacheKey, resultToCache);
+    let filteredResults = allResults;
+    
+    if (keyword && keyword.trim() !== '') {
+      const lowercaseKeyword = keyword.toLowerCase();
+      filteredResults = allResults.filter(item =>
+        item.titulo.toLowerCase().includes(lowercaseKeyword) ||
+        item.orgao.toLowerCase().includes(lowercaseKeyword) ||
+        item.municipio.toLowerCase().includes(lowercaseKeyword)
+      );
+    }
+
+    // Ordenar por data
+    filteredResults.sort((a, b) => new Date(b.data_publicacao).getTime() - new Date(a.data_publicacao).getTime());
+
+    // Paginação
+    const itemsPerPage = 10;
+    const totalPages = Math.ceil(filteredResults.length / itemsPerPage);
+    const startIndex = (pageNum - 1) * itemsPerPage;
+    const paginatedResults = filteredResults.slice(startIndex, startIndex + itemsPerPage);
+
+    console.log(`✅ Retornando ${paginatedResults.length} de ${filteredResults.length} resultados (página ${pageNum}/${totalPages})`);
+
+    return res.status(200).json({
+      data: paginatedResults,
+      total: filteredResults.length,
+      totalPages,
+      cached: false,
+      source: 'hybrid',
+      supabaseCount: supabaseResults.count,
+      warning: null
+    });
+
+  } catch (error: any) {
+    console.error("💥 Erro na busca híbrida:", error);
+    return res.status(500).json({ 
+      error: error.message || 'Erro interno no servidor',
+      suggestion: 'Tente novamente em alguns momentos.'
+    });
+  }
+}dResult(cacheKey, resultToCache);
 
     const finalPage = parseInt(page as string, 10);
     const itemsPerPage = 10;
