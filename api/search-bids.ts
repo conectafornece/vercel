@@ -18,7 +18,6 @@ const mapBidData = (contratacao: any) => ({
   fonte: 'PNCP (Consulta Ativa)',
 });
 
-
 function formatDateToYYYYMMDD(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -49,7 +48,6 @@ const fetchPageForModality = async (modalityCode: string, page: number, basePara
     return JSON.parse(responseBody);
 };
 
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
@@ -68,8 +66,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const baseParams = new URLSearchParams();
+    
+    // ===================================================================
+    // MUDANÇA 1: Usar data inicial e final mais amplas para capturar mais dados
+    // ===================================================================
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 30); // 30 dias atrás
     const futureDate = new Date();
-    futureDate.setDate(new Date().getDate() + 60);
+    futureDate.setDate(futureDate.getDate() + 60);
+    
+    baseParams.append('dataInicial', formatDateToYYYYMMDD(startDate));
     baseParams.append('dataFinal', formatDateToYYYYMMDD(futureDate));
 
     if (city && city !== 'all') {
@@ -116,18 +122,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     
     console.log(`Total de ${allBids.length} licitações recebidas da API antes do filtro de palavra-chave.`);
 
+    // ===================================================================
+    // MUDANÇA 2: Filtro de palavra-chave melhorado
+    // ===================================================================
     let filteredBids = allBids;
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
         const lowercasedKeyword = keyword.trim().toLowerCase();
-        filteredBids = allBids.filter(bid =>
-            (bid.objetoCompra && bid.objetoCompra.toLowerCase().includes(lowercasedKeyword)) ||
-            (bid.orgaoEntidade?.razaoSocial && bid.orgaoEntidade.razaoSocial.toLowerCase().includes(lowercasedKeyword))
-        );
+        filteredBids = allBids.filter(bid => {
+            // Buscar no objeto da compra
+            const objetoMatch = bid.objetoCompra && 
+                bid.objetoCompra.toLowerCase().includes(lowercasedKeyword);
+            
+            // Buscar na razão social do órgão
+            const orgaoMatch = bid.orgaoEntidade?.razaoSocial && 
+                bid.orgaoEntidade.razaoSocial.toLowerCase().includes(lowercasedKeyword);
+            
+            // Buscar também no processo e outros campos relevantes
+            const processoMatch = bid.processo && 
+                bid.processo.toLowerCase().includes(lowercasedKeyword);
+                
+            const modalidadeMatch = bid.modalidadeNome && 
+                bid.modalidadeNome.toLowerCase().includes(lowercasedKeyword);
+                
+            const situacaoMatch = bid.situacaoCompraNome && 
+                bid.situacaoCompraNome.toLowerCase().includes(lowercasedKeyword);
+            
+            return objetoMatch || orgaoMatch || processoMatch || modalidadeMatch || situacaoMatch;
+        });
     }
     
     console.log(`Total de ${filteredBids.length} licitações após aplicar o filtro "${keyword}".`);
     
-    filteredBids.sort((a, b) => new Date(b.dataPublicacaoPncp).getTime() - new Date(a.dataPublicacaoPncp).getTime());
+    // ===================================================================
+    // MUDANÇA 3: Ordenação melhorada
+    // ===================================================================
+    filteredBids.sort((a, b) => {
+        const dateA = new Date(a.dataPublicacaoPncp || a.dataInclusao);
+        const dateB = new Date(b.dataPublicacaoPncp || b.dataInclusao);
+        return dateB.getTime() - dateA.getTime();
+    });
 
     const finalPage = parseInt(page as string, 10);
     const itemsPerPage = 10;
@@ -137,8 +170,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({
       data: mappedData,
-      total: totalAggregatedResults,
+      // ===================================================================
+      // MUDANÇA 4: Retornar total filtrado, não agregado
+      // ===================================================================
+      total: filteredBids.length,
       totalPages: Math.ceil(filteredBids.length / itemsPerPage) || 1,
+      // ===================================================================
+      // MUDANÇA 5: Dados de debug (opcional - pode remover em produção)
+      // ===================================================================
+      debug: {
+        totalFromAPI: allBids.length,
+        totalFiltered: filteredBids.length,
+        keyword: keyword,
+        modalityCodes: modalityCodes,
+        uf: uf,
+        city: city
+      }
     });
 
   } catch (error: any) {
