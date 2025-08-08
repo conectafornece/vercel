@@ -155,8 +155,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const baseParams = new URLSearchParams();
+    
+    // ===================================================================
+    // FILTRO DE DATA MAIS INTELIGENTE
+    // ===================================================================
+    const today = new Date();
     const futureDate = new Date();
-    futureDate.setDate(new Date().getDate() + 60);
+    futureDate.setDate(today.getDate() + 60);
+    
+    // Para buscas em estados, usar período menor para reduzir resultados
+    if (uf && uf !== 'all' && (!city || city === 'all')) {
+      const startDate = new Date();
+      startDate.setDate(today.getDate() - 30); // Últimos 30 dias
+      baseParams.append('dataInicial', formatDateToYYYYMMDD(startDate));
+      console.log('🗓️ Busca em estado - limitando aos últimos 30 dias para otimizar');
+    }
+    
     baseParams.append('dataFinal', formatDateToYYYYMMDD(futureDate));
 
     if (city && city !== 'all') {
@@ -208,9 +222,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const totalPages = data.totalPaginas || 0;
           console.log(`Modalidade ${modalityCode}: ${bidsFromResult.length} resultados, ${totalPages} páginas`);
 
-          // Limitar páginas adicionais para evitar timeout
+          // ===================================================================
+          // ESTRATÉGIA INTELIGENTE PARA PÁGINAS ADICIONAIS
+          // ===================================================================
           if (totalPages > 1) {
-            const maxPages = uf && uf !== 'all' && (!city || city === 'all') ? 3 : MAX_PAGES_TO_FETCH;
+            let maxPages;
+            
+            if (uf && uf !== 'all' && (!city || city === 'all')) {
+              // Para estados: buscar mais páginas se tivermos palavra-chave específica
+              if (keyword && keyword.trim() !== '') {
+                maxPages = Math.min(totalPages, 20); // Buscar mais páginas com palavra-chave
+                console.log(`🔍 Palavra-chave detectada - buscando até ${maxPages} páginas na modalidade ${modalityCode}`);
+              } else {
+                maxPages = Math.min(totalPages, 5); // Menos páginas sem palavra-chave
+              }
+            } else {
+              maxPages = MAX_PAGES_TO_FETCH; // Para cidades, buscar todas as páginas
+            }
+            
             const pagesToFetch = Math.min(totalPages, maxPages);
             
             for (let i = 2; i <= pagesToFetch; i++) {
@@ -228,7 +257,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (subsequentPagePromises.length > 0) {
       console.log(`Processando ${subsequentPagePromises.length} páginas adicionais em lotes...`);
       
-      const batchSize = 3; // Processar 3 páginas por vez
+      // ===================================================================
+      // BATCHING DINÂMICO BASEADO NO NÚMERO DE PÁGINAS
+      // ===================================================================
+      const batchSize = subsequentPagePromises.length > 50 ? 5 : 3; // Lotes maiores para muitas páginas
+      
       for (let i = 0; i < subsequentPagePromises.length; i += batchSize) {
         const batch = subsequentPagePromises.slice(i, i + batchSize);
         
@@ -249,9 +282,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }
         }
         
-        // Aguardar entre lotes
+        // Aguardar entre lotes - menos tempo se há palavra-chave específica
         if (i + batchSize < subsequentPagePromises.length) {
-          await delay(200);
+          const waitTime = keyword && keyword.trim() !== '' ? 100 : 200;
+          await delay(waitTime);
         }
       }
     }
@@ -261,10 +295,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let filteredBids = allBids;
     if (keyword && typeof keyword === 'string' && keyword.trim() !== '') {
       const lowercasedKeyword = keyword.trim().toLowerCase();
-      filteredBids = allBids.filter(bid =>
-        (bid.objetoCompra && bid.objetoCompra.toLowerCase().includes(lowercasedKeyword)) ||
-        (bid.orgaoEntidade?.razaoSocial && bid.orgaoEntidade.razaoSocial.toLowerCase().includes(lowercasedKeyword))
-      );
+      
+      // ===================================================================
+      // FILTRO MAIS ABRANGENTE PARA CAPTURAR MAIS RESULTADOS
+      // ===================================================================
+      filteredBids = allBids.filter(bid => {
+        const searchText = [
+          bid.objetoCompra,
+          bid.orgaoEntidade?.razaoSocial,
+          bid.unidadeOrgao?.municipioNome,
+          bid.modalidadeNome
+        ].filter(Boolean).join(' ').toLowerCase();
+        
+        return searchText.includes(lowercasedKeyword);
+      });
+      
+      console.log(`🔍 Filtro aplicado: "${keyword}"`);
+      console.log(`📊 Resultados por modalidade antes do filtro:`);
+      const modalityCounts = {};
+      allBids.forEach(bid => {
+        const modalidade = bid.modalidadeNome || 'Não informada';
+        modalityCounts[modalidade] = (modalityCounts[modalidade] || 0) + 1;
+      });
+      Object.entries(modalityCounts).forEach(([modalidade, count]) => {
+        console.log(`   ${modalidade}: ${count} licitações`);
+      });
     }
     
     console.log(`Total de ${filteredBids.length} licitações após aplicar o filtro "${keyword}".`);
