@@ -1,7 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/proposta';
-const ALL_MODALITY_CODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '12', '13'];
+// CÓDIGOS CORRETOS DAS MODALIDADES CONFORME MANUAL OFICIAL PNCP
+const ALL_MODALITY_CODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'];
 const DELAY_BETWEEN_REQUESTS = 100;
 const MAX_RETRIES = 3;
 
