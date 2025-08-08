@@ -12,23 +12,35 @@ const MAX_RETRIES = 3;
 const cache = new Map();
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutos de cache
 
-const getCacheKey = (baseParams: URLSearchParams, modalityCodes: string[], keyword?: string) => {
-  const key = `${baseParams.toString()}_${modalityCodes.join(',')}_${keyword || ''}`;
+// ===================================================================
+// SISTEMA DE CACHE COM CHAVE MAIS GRANULAR
+// ===================================================================
+const cache = new Map();
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutos de cache
+
+const getCacheKey = (baseParams: URLSearchParams, modalityCodes: string[], keyword?: string, page?: string) => {
+  // Chave mais específica incluindo parâmetros importantes
+  const sortedParams = Array.from(baseParams.entries()).sort();
+  const paramsString = sortedParams.map(([k, v]) => `${k}=${v}`).join('&');
+  const modalitiesString = modalityCodes.sort().join(',');
+  const key = `${paramsString}_mod[${modalitiesString}]_kw[${keyword || 'none'}]_p${page || '1'}`;
   return key;
 };
 
 const getCachedResult = (key: string) => {
   const cached = cache.get(key);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    console.log('📦 Resultado encontrado no cache!');
+    console.log(`📦 Cache HIT para chave: ${key.substring(0, 80)}...`);
     return cached.data;
   }
   
   // Remove cache expirado
   if (cached) {
+    console.log(`🗑️ Removendo cache expirado: ${key.substring(0, 80)}...`);
     cache.delete(key);
   }
   
+  console.log(`❌ Cache MISS para chave: ${key.substring(0, 80)}...`);
   return null;
 };
 
@@ -71,7 +83,7 @@ function formatDateToYYYYMMDD(date: Date): string {
 // Função para adicionar delay entre requisições
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Função auxiliar com retry logic
+// Função auxiliar com retry logic MELHORADO
 const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> => {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -88,22 +100,31 @@ const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> 
       if (response.ok) {
         const responseBody = await response.text();
         if (responseBody) {
-          return JSON.parse(responseBody);
+          const data = JSON.parse(responseBody);
+          console.log(`✅ Sucesso: ${data?.data?.length || 0} registros retornados`);
+          return data;
+        } else {
+          console.log(`⚠️ Resposta vazia (body vazio) na tentativa ${attempt}`);
         }
+      } else if (response.status === 204) {
+        // 204 No Content - considerado sucesso com resultado vazio
+        console.log(`📭 Status 204 (No Content) - sem resultados para esta página`);
+        return { data: [], totalRegistros: 0, totalPaginas: 0 };
       } else if (response.status === 429) {
         // Rate limit - esperar mais tempo
         const waitTime = Math.pow(2, attempt) * 1000; // Backoff exponencial
-        console.log(`Rate limit detectado. Aguardando ${waitTime}ms antes da próxima tentativa...`);
+        console.log(`🚫 Rate limit detectado. Aguardando ${waitTime}ms antes da próxima tentativa...`);
         await delay(waitTime);
         continue;
+      } else {
+        console.error(`❌ Erro HTTP ${response.status} (${response.statusText}) na tentativa ${attempt}`);
       }
       
-      console.error(`Erro ${response.status} na tentativa ${attempt}`);
-      
     } catch (error: any) {
-      console.error(`Erro na tentativa ${attempt}:`, error.message);
+      console.error(`💥 Erro na tentativa ${attempt}:`, error.message);
       
       if (attempt === retries) {
+        console.error(`🔥 Todas as ${retries} tentativas falharam para: ${url}`);
         throw error;
       }
       
@@ -112,6 +133,7 @@ const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> 
     }
   }
   
+  console.log(`⚠️ Retornando null após ${retries} tentativas para: ${url}`);
   return null;
 };
 
@@ -185,12 +207,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // ===================================================================
-    // VERIFICAR CACHE ANTES DE FAZER REQUISIÇÕES
+    // VERIFICAR CACHE COM LOGS DETALHADOS
     // ===================================================================
-    const cacheKey = getCacheKey(baseParams, modalityCodes, keyword as string);
+    const cacheKey = getCacheKey(baseParams, modalityCodes, keyword as string, page as string);
+    console.log(`🔍 Verificando cache para: ${cacheKey.substring(0, 100)}...`);
+    
     const cachedResult = getCachedResult(cacheKey);
     
     if (cachedResult) {
+      console.log(`📦 Retornando ${cachedResult.filteredBids?.length || 0} resultados do cache`);
       // Aplicar paginação no resultado do cache
       const finalPage = parseInt(page as string, 10);
       const itemsPerPage = 10;
@@ -213,9 +238,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const subsequentPagePromises = [];
 
     // Processar modalidades sequencialmente para evitar rate limit
+    let successfulRequests = 0;
+    let failedRequests = 0;
+    
     for (const modalityCode of modalityCodes) {
       try {
-        console.log(`Processando modalidade ${modalityCode}...`);
+        console.log(`🔄 Processando modalidade ${modalityCode}...`);
         
         const data = await fetchPageForModality(modalityCode, 1, baseParams);
         
@@ -223,9 +251,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const bidsFromResult = data.data || [];
           allBids.push(...bidsFromResult);
           totalAggregatedResults += data.totalRegistros || 0;
+          successfulRequests++;
           
           const totalPages = data.totalPaginas || 0;
-          console.log(`Modalidade ${modalityCode}: ${bidsFromResult.length} resultados, ${totalPages} páginas`);
+          console.log(`✅ Modalidade ${modalityCode}: ${bidsFromResult.length} resultados página 1, ${totalPages} páginas totais`);
 
           // ===================================================================
           // ESTRATÉGIA MAIS AGRESSIVA PARA PALAVRA-CHAVE ESPECÍFICA
@@ -251,39 +280,61 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               subsequentPagePromises.push({modalityCode, page: i});
             }
           }
+        } else {
+          failedRequests++;
+          console.log(`❌ Falha na modalidade ${modalityCode} - dados nulos retornados`);
         }
       } catch (error) {
-        console.error(`Erro ao processar modalidade ${modalityCode}:`, error);
+        failedRequests++;
+        console.error(`💥 Erro ao processar modalidade ${modalityCode}:`, error);
         // Continuar com outras modalidades mesmo se uma falhar
       }
     }
+    
+    console.log(`📊 Resumo primeira página: ${successfulRequests} sucessos, ${failedRequests} falhas de ${modalityCodes.length} modalidades`);
 
     // Processar páginas subsequentes em lotes pequenos
     if (subsequentPagePromises.length > 0) {
-      console.log(`Processando ${subsequentPagePromises.length} páginas adicionais em lotes...`);
+      console.log(`📄 Processando ${subsequentPagePromises.length} páginas adicionais em lotes...`);
       
       // ===================================================================
-      // BATCHING DINÂMICO BASEADO NO NÚMERO DE PÁGINAS
+      // BATCHING DINÂMICO COM CONTADORES DE SUCESSO/FALHA
       // ===================================================================
       const batchSize = subsequentPagePromises.length > 50 ? 5 : 3; // Lotes maiores para muitas páginas
+      let batchSuccesses = 0;
+      let batchFailures = 0;
       
       for (let i = 0; i < subsequentPagePromises.length; i += batchSize) {
         const batch = subsequentPagePromises.slice(i, i + batchSize);
+        console.log(`🔄 Processando lote ${Math.floor(i/batchSize) + 1}/${Math.ceil(subsequentPagePromises.length/batchSize)} (páginas ${i+1}-${Math.min(i+batchSize, subsequentPagePromises.length)})`);
         
         const batchPromises = batch.map(async ({modalityCode, page}) => {
           try {
-            return await fetchPageForModality(modalityCode, page, baseParams);
+            const result = await fetchPageForModality(modalityCode, page, baseParams);
+            if (result && result.data) {
+              return { success: true, data: result.data, modalityCode, page };
+            } else {
+              return { success: false, modalityCode, page, reason: 'dados nulos' };
+            }
           } catch (error) {
-            console.error(`Erro na página ${page} da modalidade ${modalityCode}:`, error);
-            return null;
+            return { success: false, modalityCode, page, reason: error.message };
           }
         });
         
         const batchResults = await Promise.allSettled(batchPromises);
         
         for (const result of batchResults) {
-          if (result.status === 'fulfilled' && result.value) {
-            allBids.push(...(result.value.data || []));
+          if (result.status === 'fulfilled') {
+            if (result.value.success) {
+              allBids.push(...result.value.data);
+              batchSuccesses++;
+            } else {
+              batchFailures++;
+              console.log(`❌ Falha na página ${result.value.page} da modalidade ${result.value.modalityCode}: ${result.value.reason}`);
+            }
+          } else {
+            batchFailures++;
+            console.log(`💥 Erro promise rejected:`, result.reason);
           }
         }
         
@@ -293,6 +344,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           await delay(waitTime);
         }
       }
+      
+      console.log(`📊 Resumo páginas adicionais: ${batchSuccesses} sucessos, ${batchFailures} falhas de ${subsequentPagePromises.length} páginas`);
     }
     
     console.log(`Total de ${allBids.length} licitações recebidas da API antes do filtro de palavra-chave.`);
@@ -361,13 +414,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       'Busca em estado limitada a algumas modalidades para evitar timeout' : null;
 
     // ===================================================================
-    // SALVAR NO CACHE ANTES DE RETORNAR
+    // SALVAR NO CACHE COM LOGS DETALHADOS
     // ===================================================================
     const resultToCache = {
       filteredBids,
       totalAggregatedResults,
       warning
     };
+    
+    console.log(`💾 Salvando no cache:`);
+    console.log(`   - Chave: ${cacheKey.substring(0, 100)}...`);
+    console.log(`   - Total bruto: ${allBids.length} licitações`);
+    console.log(`   - Total filtrado: ${filteredBids.length} licitações`);
+    console.log(`   - Cache entries: ${cache.size}/100`);
+    
     setCachedResult(cacheKey, resultToCache);
 
     const finalPage = parseInt(page as string, 10);
