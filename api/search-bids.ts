@@ -117,7 +117,8 @@ const saveToSupabase = async (licitacoes: any[]) => {
     };
 
     return {
-      id_pncp: bid.numeroControlePNCP || `${bid.orgaoEntidade?.cnpj}-${bid.anoCompra}-${bid.sequencialCompra}`,
+      // CORREÇÃO: Usar apenas numeroControlePNCP como chave única
+      id_pncp: bid.numeroControlePNCP,
       titulo: bid.objetoCompra || 'Objeto não informado',
       orgao: bid.orgaoEntidade?.razaoSocial || 'Órgão não informado',
       modalidade: bid.modalidadeNome || 'Modalidade não informada',
@@ -141,7 +142,7 @@ const saveToSupabase = async (licitacoes: any[]) => {
       method: 'POST',
       headers: {
         ...supabaseHeaders,
-        'Prefer': 'resolution=merge-duplicates'
+        'Prefer': 'resolution=ignore-duplicates' // CORREÇÃO: Ignorar duplicatas em vez de merge
       },
       body: JSON.stringify(licitacoesFormatadas)
     });
@@ -225,15 +226,13 @@ const searchInPNCP = async (uf?: string, city?: string, keyword?: string) => {
   const modalityCodes = ALL_MODALITY_CODES;
   console.log(`🎯 Buscando todas as modalidades: ${modalityCodes.join(', ')}`);
 
-  // Parâmetros base
+  // Parâmetros base - CORREÇÃO: Remover filtro de data inicial para pegar mais resultados
   const baseParams = new URLSearchParams();
   const today = new Date();
   const futureDate = new Date();
   futureDate.setDate(today.getDate() + 60);
   
-  const startDate = new Date();
-  startDate.setDate(today.getDate() - 30);
-  baseParams.append('dataInicial', formatDateToYYYYMMDD(startDate));
+  // Apenas data final, sem data inicial para capturar mais licitações
   baseParams.append('dataFinal', formatDateToYYYYMMDD(futureDate));
 
   if (city && city !== 'all') {
