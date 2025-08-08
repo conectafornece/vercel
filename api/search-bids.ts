@@ -93,20 +93,66 @@ const saveToSupabase = async (licitacoes: any[]) => {
   // Debug: mostrar estrutura dos dados
   console.log('🔍 Exemplo de licitação da API PNCP:', JSON.stringify(licitacoes[0], null, 2));
   
-  const licitacoesFormatadas = licitacoes.map(bid => ({
-    // CORREÇÃO: Usar numeroControlePNCP como id_pncp
-    id_pncp: bid.numeroControlePNCP || `${bid.orgaoEntidade?.cnpj}-${bid.anoCompra}-${bid.sequencialCompra}`,
-    titulo: bid.objetoCompra || 'Objeto não informado',
-    orgao: bid.orgaoEntidade?.razaoSocial || 'Órgão não informado',
-    modalidade: bid.modalidadeNome || 'Modalidade não informada',
-    data_publicacao: bid.dataPublicacaoPncp ? new Date(bid.dataPublicacaoPncp).toISOString().split('T')[0] : null,
-    link_oficial: bid.linkSistemaOrigem || `https://pncp.gov.br/app/editais/${bid.orgaoEntidade?.cnpj}/${bid.anoCompra}/${bid.sequencialCompra}`,
-    status: bid.situacaoCompraNome || 'Status não informado',
-    municipio: bid.unidadeOrgao?.municipioNome || 'Município não informado',
-    municipio_codigo_ibge: bid.unidadeOrgao?.codigoIbge || null,
-    uf: bid.unidadeOrgao?.ufSigla || 'UF não informada',
-    dados_completos: bid
-  }));
+  const licitacoesFormatadas = licitacoes.map(bid => {
+    // Função para converter data ISO para formato YYYY-MM-DD
+    const formatDate = (dateString: string | null) => {
+      if (!dateString) return null;
+      try {
+        return new Date(dateString).toISOString().split('T')[0];
+      } catch {
+        return null;
+      }
+    };
+
+    // Determinar data de expiração baseada no status e datas disponíveis
+    const getDataExpiracao = () => {
+      // Se tem data de encerramento de proposta, usar ela + 30 dias
+      if (bid.dataEncerramentoProposta) {
+        const dataEncerramento = new Date(bid.dataEncerramentoProposta);
+        dataEncerramento.setDate(dataEncerramento.getDate() + 30);
+        return dataEncerramento.toISOString().split('T')[0];
+      }
+      
+      // Se tem data de abertura, usar ela + 60 dias
+      if (bid.dataAberturaProposta) {
+        const dataAbertura = new Date(bid.dataAberturaProposta);
+        dataAbertura.setDate(dataAbertura.getDate() + 60);
+        return dataAbertura.toISOString().split('T')[0];
+      }
+      
+      // Caso contrário, usar data de publicação + 90 dias
+      if (bid.dataPublicacaoPncp) {
+        const dataPublicacao = new Date(bid.dataPublicacaoPncp);
+        dataPublicacao.setDate(dataPublicacao.getDate() + 90);
+        return dataPublicacao.toISOString().split('T')[0];
+      }
+      
+      // Fallback: hoje + 90 dias
+      const hoje = new Date();
+      hoje.setDate(hoje.getDate() + 90);
+      return hoje.toISOString().split('T')[0];
+    };
+
+    return {
+      // CORREÇÃO: Usar numeroControlePNCP como id_pncp
+      id_pncp: bid.numeroControlePNCP || `${bid.orgaoEntidade?.cnpj}-${bid.anoCompra}-${bid.sequencialCompra}`,
+      titulo: bid.objetoCompra || 'Objeto não informado',
+      orgao: bid.orgaoEntidade?.razaoSocial || 'Órgão não informado',
+      modalidade: bid.modalidadeNome || 'Modalidade não informada',
+      data_publicacao: formatDate(bid.dataPublicacaoPncp),
+      data_abertura_proposta: formatDate(bid.dataAberturaProposta),
+      data_encerramento_proposta: formatDate(bid.dataEncerramentoProposta),
+      data_expiracao: getDataExpiracao(), // ← NOVO: Para automação de limpeza
+      link_oficial: bid.linkSistemaOrigem || `https://pncp.gov.br/app/editais/${bid.orgaoEntidade?.cnpj}/${bid.anoCompra}/${bid.sequencialCompra}`,
+      status: bid.situacaoCompraNome || 'Status não informado',
+      municipio: bid.unidadeOrgao?.municipioNome || 'Município não informado',
+      municipio_codigo_ibge: bid.unidadeOrgao?.codigoIbge || null,
+      uf: bid.unidadeOrgao?.ufSigla || 'UF não informada',
+      valor_estimado: bid.valorTotalEstimado || null, // ← NOVO: Valor da licitação
+      processo: bid.processo || null, // ← NOVO: Número do processo
+      dados_completos: bid
+    };
+  });
 
   console.log('🔍 Exemplo de licitação formatada:', JSON.stringify(licitacoesFormatadas[0], null, 2));
 
