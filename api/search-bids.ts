@@ -49,7 +49,7 @@ const mapBidData = (item: any, fonte = 'PNCP') => ({
 // ===================================================================
 
 // Buscar no Supabase
-const searchInSupabase = async (uf?: string, city?: string, keyword?: string) => {
+const searchInSupabase = async (uf?: string, city?: string, keyword?: string, modality?: string) => {
   console.log('🔍 Buscando no Supabase...');
   
   try {
@@ -67,6 +67,43 @@ const searchInSupabase = async (uf?: string, city?: string, keyword?: string) =>
     if (keyword && keyword.trim() !== '') {
       url += `&or=(titulo.ilike.*${keyword}*,orgao.ilike.*${keyword}*)`;
     }
+
+    // NOVO: Filtro por modalidade - Mapeamento melhorado
+    if (modality && modality !== 'all' && modality.trim() !== '') {
+      const modalidadeMap: { [key: string]: string[] } = {
+        'dispensa': ['Dispensa', 'Dispensa de Licitação'],
+        'pregao': ['Pregão', 'Pregão - Eletrônico', 'Pregão Eletrônico'],
+        'concorrencia': ['Concorrência', 'Concorrência - Eletrônica'],
+        'tomada': ['Tomada de Preços'],
+        'convite': ['Convite'],
+        'leilao': ['Leilão'],
+        'credenciamento': ['Credenciamento'],
+        'manifestacao': ['Manifestação de Interesse'],
+        'rdc': ['RDC']
+      };
+
+      const modalidades = modality.toLowerCase().split(',').map(m => m.trim());
+      let modalidadesToSearch: string[] = [];
+
+      modalidades.forEach(mod => {
+        if (modalidadeMap[mod]) {
+          modalidadesToSearch.push(...modalidadeMap[mod]);
+        } else {
+          // Se não estiver no mapa, usar o valor direto
+          modalidadesToSearch.push(mod);
+        }
+      });
+
+      if (modalidadesToSearch.length === 1) {
+        url += `&modalidade.ilike.*${modalidadesToSearch[0]}*`;
+      } else {
+        const modalidadeFilter = modalidadesToSearch.map(m => `modalidade.ilike.*${m}*`).join(',');
+        url += `&or=(${modalidadeFilter})`;
+      }
+      console.log(`🎯 Filtrando por modalidades: ${modalidadesToSearch.join(', ')}`);
+    }
+
+    console.log(`🔗 URL de busca: ${url}`);
 
     const response = await fetch(url, { headers: supabaseHeaders });
 
@@ -326,7 +363,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ===================================================================
     // ETAPA 1: BUSCAR NO SUPABASE (sempre)
     // ===================================================================
-    let supabaseResults = await searchInSupabase(uf as string, city as string, keyword as string);
+    let supabaseResults = await searchInSupabase(uf as string, city as string, keyword as string, modality as string);
 
     // ===================================================================
     // ETAPA 2: BUSCAR NA API PNCP (sempre, independente dos resultados do Supabase)
