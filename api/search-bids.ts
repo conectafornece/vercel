@@ -30,32 +30,18 @@ function formatDateToYYYYMMDD(date: Date): string {
   return `${year}${month}${day}`;
 }
 
-const mapBidData = (item: any, fonte = 'PNCP') => ({
-  id_unico: item.id_pncp || item.numeroControlePNCP || item.id,
-  titulo: item.titulo || item.objetoCompra || 'Objeto não informado',
-  orgao: item.orgao || item.orgaoEntidade?.razaoSocial || 'Órgão não informado',
-  modalidade: item.modalidade || item.modalidadeNome || 'Modalidade não informada',
-  data_publicacao: item.data_publicacao || item.dataPublicacaoPncp,
-  link_oficial: item.link_oficial || item.linkSistemaOrigem || `https://pncp.gov.br/app/editais/${item.orgaoEntidade?.cnpj}/${item.anoCompra}/${item.sequencialCompra}`,
-  status: item.status || item.situacaoCompraNome || 'Status não informado',
-  municipio: item.municipio || item.unidadeOrgao?.municipioNome || 'Município não informado',
-  municipio_codigo_ibge: item.municipio_codigo_ibge || item.unidadeOrgao?.codigoIbge || null,
-  uf: item.uf || item.unidadeOrgao?.ufSigla || 'UF não informada',
-  fonte: fonte,
-});
-
 // ===================================================================
-// FUNÇÕES SUPABASE
+// FUNÇÕES SUPABASE - APENAS FILTROS BÁSICOS
 // ===================================================================
 
-// Buscar no Supabase
-const searchInSupabase = async (uf?: string, city?: string, keyword?: string, modality?: string) => {
+// Buscar no Supabase - SEM filtro de modalidade
+const searchInSupabase = async (uf?: string, city?: string, keyword?: string) => {
   console.log('🔍 Buscando no Supabase...');
   
   try {
-    let url = `${SUPABASE_URL}/rest/v1/licitacoes?select=*&order=data_publicacao.desc.nullslast&limit=100`;
+    let url = `${SUPABASE_URL}/rest/v1/licitacoes?select=*&order=data_publicacao.desc.nullslast&limit=200`;
     
-    // Filtros
+    // Apenas filtros básicos - modalidade será filtrada no frontend
     if (uf && uf !== 'all') {
       url += `&uf=eq.${uf}`;
     }
@@ -67,43 +53,6 @@ const searchInSupabase = async (uf?: string, city?: string, keyword?: string, mo
     if (keyword && keyword.trim() !== '') {
       url += `&or=(titulo.ilike.*${keyword}*,orgao.ilike.*${keyword}*)`;
     }
-
-    // NOVO: Filtro por modalidade - Mapeamento melhorado
-    if (modality && modality !== 'all' && modality.trim() !== '') {
-      const modalidadeMap: { [key: string]: string[] } = {
-        'dispensa': ['Dispensa', 'Dispensa de Licitação'],
-        'pregao': ['Pregão', 'Pregão - Eletrônico', 'Pregão Eletrônico'],
-        'concorrencia': ['Concorrência', 'Concorrência - Eletrônica'],
-        'tomada': ['Tomada de Preços'],
-        'convite': ['Convite'],
-        'leilao': ['Leilão'],
-        'credenciamento': ['Credenciamento'],
-        'manifestacao': ['Manifestação de Interesse'],
-        'rdc': ['RDC']
-      };
-
-      const modalidades = modality.toLowerCase().split(',').map(m => m.trim());
-      let modalidadesToSearch: string[] = [];
-
-      modalidades.forEach(mod => {
-        if (modalidadeMap[mod]) {
-          modalidadesToSearch.push(...modalidadeMap[mod]);
-        } else {
-          // Se não estiver no mapa, usar o valor direto
-          modalidadesToSearch.push(mod);
-        }
-      });
-
-      if (modalidadesToSearch.length === 1) {
-        url += `&modalidade.ilike.*${modalidadesToSearch[0]}*`;
-      } else {
-        const modalidadeFilter = modalidadesToSearch.map(m => `modalidade.ilike.*${m}*`).join(',');
-        url += `&or=(${modalidadeFilter})`;
-      }
-      console.log(`🎯 Filtrando por modalidades: ${modalidadesToSearch.join(', ')}`);
-    }
-
-    console.log(`🔗 URL de busca: ${url}`);
 
     const response = await fetch(url, { headers: supabaseHeaders });
 
@@ -121,14 +70,11 @@ const searchInSupabase = async (uf?: string, city?: string, keyword?: string, mo
   }
 };
 
-// Salvar no Supabase - VERSÃO CORRIGIDA
+// Salvar no Supabase
 const saveToSupabase = async (licitacoes: any[]) => {
   if (!licitacoes.length) return 0;
   
   console.log(`💾 Salvando ${licitacoes.length} licitações no Supabase...`);
-  
-  // Debug: mostrar estrutura dos dados
-  console.log('🔍 Exemplo de licitação da API PNCP:', JSON.stringify(licitacoes[0], null, 2));
   
   const licitacoesFormatadas = licitacoes.map(bid => {
     // Função para converter data ISO para formato YYYY-MM-DD
@@ -171,7 +117,6 @@ const saveToSupabase = async (licitacoes: any[]) => {
     };
 
     return {
-      // CORREÇÃO: Usar numeroControlePNCP como id_pncp
       id_pncp: bid.numeroControlePNCP || `${bid.orgaoEntidade?.cnpj}-${bid.anoCompra}-${bid.sequencialCompra}`,
       titulo: bid.objetoCompra || 'Objeto não informado',
       orgao: bid.orgaoEntidade?.razaoSocial || 'Órgão não informado',
@@ -179,19 +124,17 @@ const saveToSupabase = async (licitacoes: any[]) => {
       data_publicacao: formatDate(bid.dataPublicacaoPncp),
       data_abertura_proposta: formatDate(bid.dataAberturaProposta),
       data_encerramento_proposta: formatDate(bid.dataEncerramentoProposta),
-      data_expiracao: getDataExpiracao(), // ← NOVO: Para automação de limpeza
+      data_expiracao: getDataExpiracao(),
       link_oficial: bid.linkSistemaOrigem || `https://pncp.gov.br/app/editais/${bid.orgaoEntidade?.cnpj}/${bid.anoCompra}/${bid.sequencialCompra}`,
       status: bid.situacaoCompraNome || 'Status não informado',
       municipio: bid.unidadeOrgao?.municipioNome || 'Município não informado',
       municipio_codigo_ibge: bid.unidadeOrgao?.codigoIbge || null,
       uf: bid.unidadeOrgao?.ufSigla || 'UF não informada',
-      valor_estimado: bid.valorTotalEstimado ? parseFloat(bid.valorTotalEstimado) : null, // ← NOVO: Valor em reais
-      processo: bid.processo || null, // ← NOVO: Número do processo
+      valor_estimado: bid.valorTotalEstimado ? parseFloat(bid.valorTotalEstimado) : null,
+      processo: bid.processo || null,
       dados_completos: bid
     };
   });
-
-  console.log('🔍 Exemplo de licitação formatada:', JSON.stringify(licitacoesFormatadas[0], null, 2));
 
   try {
     const response = await fetch(`${SUPABASE_URL}/rest/v1/licitacoes`, {
@@ -203,15 +146,12 @@ const saveToSupabase = async (licitacoes: any[]) => {
       body: JSON.stringify(licitacoesFormatadas)
     });
 
-    const responseText = await response.text();
-    console.log('📤 Resposta do Supabase:', response.status, responseText);
-
     if (response.ok) {
       console.log(`✅ Salvadas ${licitacoesFormatadas.length} licitações`);
       return licitacoesFormatadas.length;
     } else {
-      console.error('❌ Erro ao salvar:', response.status, response.statusText);
-      console.error('❌ Detalhes do erro:', responseText);
+      const responseText = await response.text();
+      console.error('❌ Erro ao salvar:', response.status, responseText);
       return 0;
     }
   } catch (error) {
@@ -277,17 +217,13 @@ const fetchPageForModality = async (modalityCode: string, page: number, basePara
   return await fetchWithRetry(url);
 };
 
-// Buscar na API PNCP
-const searchInPNCP = async (uf?: string, city?: string, keyword?: string, modality?: string) => {
+// Buscar na API PNCP - SEMPRE busca todas as modalidades
+const searchInPNCP = async (uf?: string, city?: string, keyword?: string) => {
   console.log('🌐 Buscando na API PNCP...');
   
-  // Determinar modalidades - BUSCAR TODAS
-  let modalityCodes: string[];
-  if (!modality || modality === 'all' || modality === '') {
-    modalityCodes = ALL_MODALITY_CODES; // Buscar todas as modalidades sempre
-  } else {
-    modalityCodes = modality.split(',');
-  }
+  // SEMPRE buscar todas as modalidades - filtro será no frontend
+  const modalityCodes = ALL_MODALITY_CODES;
+  console.log(`🎯 Buscando todas as modalidades: ${modalityCodes.join(', ')}`);
 
   // Parâmetros base
   const baseParams = new URLSearchParams();
@@ -295,13 +231,9 @@ const searchInPNCP = async (uf?: string, city?: string, keyword?: string, modali
   const futureDate = new Date();
   futureDate.setDate(today.getDate() + 60);
   
-  // Filtro de data inteligente
-  if (uf && uf !== 'all' && (!city || city === 'all') && (!keyword || keyword.trim() === '')) {
-    const startDate = new Date();
-    startDate.setDate(today.getDate() - 30);
-    baseParams.append('dataInicial', formatDateToYYYYMMDD(startDate));
-  }
-  
+  const startDate = new Date();
+  startDate.setDate(today.getDate() - 30);
+  baseParams.append('dataInicial', formatDateToYYYYMMDD(startDate));
   baseParams.append('dataFinal', formatDateToYYYYMMDD(futureDate));
 
   if (city && city !== 'all') {
@@ -309,8 +241,6 @@ const searchInPNCP = async (uf?: string, city?: string, keyword?: string, modali
   } else if (uf && uf !== 'all') {
     baseParams.append('uf', uf);
   }
-
-  console.log(`🎯 Modalidades selecionadas: ${modalityCodes.join(', ')}`);
 
   let allBids: any[] = [];
   
@@ -324,7 +254,7 @@ const searchInPNCP = async (uf?: string, city?: string, keyword?: string, modali
         
         // Se tem palavra-chave, buscar mais páginas
         if (keyword && keyword.trim() !== '' && data.totalPaginas > 1) {
-          const maxPages = Math.min(data.totalPaginas, 10);
+          const maxPages = Math.min(data.totalPaginas, 5);
           for (let page = 2; page <= maxPages; page++) {
             const pageData = await fetchPageForModality(modalityCode, page, baseParams);
             if (pageData && pageData.data) {
@@ -343,7 +273,7 @@ const searchInPNCP = async (uf?: string, city?: string, keyword?: string, modali
 };
 
 // ===================================================================
-// HANDLER PRINCIPAL - LÓGICA SIMPLIFICADA
+// HANDLER PRINCIPAL - SEM FILTRO DE MODALIDADE
 // ===================================================================
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -355,7 +285,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { modality, uf, city, page = '1', keyword } = req.query;
+    const { uf, city, page = '1', keyword } = req.query;
     const pageNum = parseInt(page as string, 10);
 
     console.log(`🚀 Busca híbrida: UF=${uf}, City=${city}, Keyword=${keyword}`);
@@ -363,13 +293,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ===================================================================
     // ETAPA 1: BUSCAR NO SUPABASE (sempre)
     // ===================================================================
-    let supabaseResults = await searchInSupabase(uf as string, city as string, keyword as string, modality as string);
+    let supabaseResults = await searchInSupabase(uf as string, city as string, keyword as string);
 
     // ===================================================================
-    // ETAPA 2: BUSCAR NA API PNCP (sempre, independente dos resultados do Supabase)
+    // ETAPA 2: BUSCAR NA API PNCP (sempre)
     // ===================================================================
     console.log('🔄 Buscando dados atuais da API PNCP...');
-    const pncpResults = await searchInPNCP(uf as string, city as string, keyword as string, modality as string);
+    const pncpResults = await searchInPNCP(uf as string, city as string, keyword as string);
     
     if (pncpResults.length > 0) {
       console.log(`💾 Encontrados ${pncpResults.length} novos registros no PNCP`);
@@ -381,30 +311,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // ===================================================================
-    // ETAPA 3: PROCESSAR E RETORNAR RESULTADOS
+    // ETAPA 3: RETORNAR TODOS OS DADOS (sem filtro de modalidade)
     // ===================================================================
-    let allResults = supabaseResults.map(item => mapBidData(item, 'Supabase'));
+    let allResults = supabaseResults;
     
-    // Filtro adicional por palavra-chave se necessário
-    if (keyword && keyword.trim() !== '') {
-      const lowercaseKeyword = keyword.toLowerCase();
-      allResults = allResults.filter(item =>
-        item.titulo.toLowerCase().includes(lowercaseKeyword) ||
-        item.orgao.toLowerCase().includes(lowercaseKeyword) ||
-        item.municipio.toLowerCase().includes(lowercaseKeyword)
-      );
-    }
-
-    // Remover duplicatas baseado no id_unico
+    // Remover duplicatas baseado no id_pncp
     const uniqueResults = allResults.filter((item, index, self) => 
-      index === self.findIndex(t => t.id_unico === item.id_unico)
+      index === self.findIndex(t => t.id_pncp === item.id_pncp)
     );
 
     // Ordenar por data de publicação (mais recente primeiro)
     uniqueResults.sort((a, b) => new Date(b.data_publicacao).getTime() - new Date(a.data_publicacao).getTime());
 
-    // Paginação
-    const itemsPerPage = 10;
+    // Paginação básica
+    const itemsPerPage = 20;
     const totalPages = Math.ceil(uniqueResults.length / itemsPerPage);
     const startIndex = (pageNum - 1) * itemsPerPage;
     const paginatedResults = uniqueResults.slice(startIndex, startIndex + itemsPerPage);
