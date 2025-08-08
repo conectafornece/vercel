@@ -1,6 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/proposta';
+// API ENDPOINTS CORRETOS CONFORME DOCUMENTAÇÃO
+const PNCP_API_PROPOSTA = 'https://pncp.gov.br/api/consulta/v1/contratacoes/proposta'; // Para licitações em aberto
+const PNCP_API_PUBLICACAO = 'https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao'; // Para todas as licitações
 // CÓDIGOS CORRETOS DAS MODALIDADES CONFORME MANUAL OFICIAL PNCP
 const ALL_MODALITY_CODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'];
 const DELAY_BETWEEN_REQUESTS = 100;
@@ -173,7 +175,7 @@ const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> 
       console.log(`Tentativa ${attempt}: ${url.substring(0, 100)}...`);
       
       const response = await fetch(url, { 
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(15000), // Aumentado timeout para 15s
         headers: { 
           'Accept': 'application/json',
           'User-Agent': 'Mozilla/5.0 (compatible; PNCP-Client/1.0)'
@@ -184,7 +186,7 @@ const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> 
         const responseBody = await response.text();
         if (responseBody) {
           const data = JSON.parse(responseBody);
-          console.log(`✅ ${data?.data?.length || 0} registros retornados`);
+          console.log(`✅ ${data?.data?.length || 0} registros retornados (Total: ${data?.totalRegistros || 0})`);
           return data;
         }
       } else if (response.status === 204) {
@@ -196,7 +198,9 @@ const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> 
         await delay(waitTime);
         continue;
       } else {
-        console.error(`❌ Erro HTTP ${response.status}`);
+        console.error(`❌ Erro HTTP ${response.status}: ${response.statusText}`);
+        const errorBody = await response.text();
+        console.error(`❌ Resposta: ${errorBody}`);
       }
       
     } catch (error: any) {
@@ -209,16 +213,7 @@ const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> 
   return null;
 };
 
-const fetchPageForModality = async (modalityCode: string, page: number, baseParams: URLSearchParams) => {
-  const params = new URLSearchParams(baseParams);
-  params.set('pagina', String(page));
-  params.append('codigoModalidadeContratacao', modalityCode);
-  
-  const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
-  
-  await delay(DELAY_BETWEEN_REQUESTS);
-  return await fetchWithRetry(url);
-};
+// Removido fetchPageForModality - substituído pela nova função searchInPNCP
 
 // Buscar na API PNCP - SEMPRE busca todas as modalidades
 const searchInPNCP = async (uf?: string, city?: string, keyword?: string) => {
@@ -324,7 +319,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Ordenar por data de publicação (mais recente primeiro)
     uniqueResults.sort((a, b) => new Date(b.data_publicacao).getTime() - new Date(a.data_publicacao).getTime());
 
-    // CORREÇÃO: Paginação sem buscar dados novos
+    // CORREÇÃO: Paginação correta (10 por página)
     const itemsPerPage = 10;
     const totalPages = Math.ceil(uniqueResults.length / itemsPerPage);
     const startIndex = (pageNum - 1) * itemsPerPage;
