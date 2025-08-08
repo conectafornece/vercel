@@ -25,27 +25,52 @@ function formatDateToYYYYMMDD(date: Date): string {
   return `${year}${month}${day}`;
 }
 
-// Função auxiliar para buscar uma única página de uma modalidade
-const fetchPageForModality = async (modalityCode: string, page: number, baseParams: URLSearchParams) => {
+// ===================================================================
+// CORREÇÃO 3: Função melhorada com rate limiting e retry
+// ===================================================================
+const fetchPageForModality = async (modalityCode: string, page: number, baseParams: URLSearchParams, retryCount = 0) => {
     const params = new URLSearchParams(baseParams);
     params.set('pagina', String(page));
     params.append('codigoModalidadeContratacao', modalityCode);
     
     const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
     
-    // ===================================================================
-    // LOG RESTAURADO AQUI
-    // ===================================================================
     console.log(`Buscando: Mod. ${modalityCode}, Pág. ${page}, URL: ${url}`);
     
-    const response = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { 'Accept': 'application/json' } });
-    if (!response.ok) {
-        console.error(`Erro na API para Mod. ${modalityCode}, Pág. ${page}. Status: ${response.status}`);
+    try {
+        // ===================================================================
+        // CORREÇÃO 4: Delay entre requisições para evitar rate limiting
+        // ===================================================================
+        if (retryCount > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+        }
+        
+        const response = await fetch(url, { 
+            signal: AbortSignal.timeout(15000), 
+            headers: { 
+                'Accept': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (compatible; PNCP-Client/1.0)'
+            } 
+        });
+        
+        if (response.status === 429 && retryCount < 3) {
+            console.log(`Rate limited. Tentativa ${retryCount + 1}/3 para Mod. ${modalityCode}, Pág. ${page}`);
+            return await fetchPageForModality(modalityCode, page, baseParams, retryCount + 1);
+        }
+        
+        if (!response.ok) {
+            console.error(`Erro na API para Mod. ${modalityCode}, Pág. ${page}. Status: ${response.status}`);
+            return null;
+        }
+        
+        const responseBody = await response.text();
+        if (!responseBody) return null;
+        
+        return JSON.parse(responseBody);
+    } catch (error) {
+        console.error(`Erro na requisição para Mod. ${modalityCode}, Pág. ${page}:`, error);
         return null;
     }
-    const responseBody = await response.text();
-    if (!responseBody) return null;
-    return JSON.parse(responseBody);
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -68,55 +93,65 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const baseParams = new URLSearchParams();
     
     // ===================================================================
-    // MUDANÇA 1: Usar data inicial e final mais amplas para capturar mais dados
+    // CORREÇÃO 1: Usar apenas dataFinal (parâmetro obrigatório)
     // ===================================================================
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - 30); // 30 dias atrás
     const futureDate = new Date();
     futureDate.setDate(futureDate.getDate() + 60);
-    
-    baseParams.append('dataInicial', formatDateToYYYYMMDD(startDate));
     baseParams.append('dataFinal', formatDateToYYYYMMDD(futureDate));
-
-    if (city && city !== 'all') {
+    
+    // ===================================================================
+    // CORREÇÃO 2: Filtros de localização mais conservadores
+    // ===================================================================
+    if (city && city !== 'all' && city !== '') {
       baseParams.append('codigoMunicipioIbge', city as string);
-    } else if (uf && uf !== 'all') {
+    } else if (uf && uf !== 'all' && uf !== '') {
       baseParams.append('uf', uf as string);
     }
 
-    const initialPromises = modalityCodes.map(code => fetchPageForModality(code, 1, baseParams));
-    const initialResults = await Promise.allSettled(initialPromises);
-
+    // ===================================================================
+    // CORREÇÃO 5: Buscar modalidades de forma sequencial para evitar rate limiting
+    // ===================================================================
     let allBids: any[] = [];
     let totalAggregatedResults = 0;
-    const subsequentPagePromises = [];
 
-    for (const [index, result] of initialResults.entries()) {
-      if (result.status === 'fulfilled' && result.value) {
-        const data = result.value;
-        const bidsFromResult = data.data || [];
-        allBids.push(...bidsFromResult);
-        totalAggregatedResults += data.totalRegistros || 0;
-        
-        const totalPages = data.totalPaginas || 0;
-        const modalityCode = modalityCodes[index];
+    console.log(`Iniciando busca para modalidades: ${modalityCodes.join(', ')}`);
 
-        if (totalPages > 1) {
-          const pagesToFetch = Math.min(totalPages, MAX_PAGES_TO_FETCH);
-          for (let i = 2; i <= pagesToFetch; i++) {
-            subsequentPagePromises.push(fetchPageForModality(modalityCode, i, baseParams));
-          }
-        }
-      }
-    }
-
-    if (subsequentPagePromises.length > 0) {
-        console.log(`Buscando ${subsequentPagePromises.length} páginas adicionais...`);
-        const subsequentResults = await Promise.allSettled(subsequentPagePromises);
-        for (const result of subsequentResults) {
-            if (result.status === 'fulfilled' && result.value) {
-                allBids.push(...(result.value.data || []));
+    for (const modalityCode of modalityCodes) {
+        try {
+            console.log(`Processando modalidade ${modalityCode}...`);
+            
+            const firstPageResult = await fetchPageForModality(modalityCode, 1, baseParams);
+            
+            if (firstPageResult && firstPageResult.data) {
+                const bidsFromResult = firstPageResult.data || [];
+                allBids.push(...bidsFromResult);
+                totalAggregatedResults += firstPageResult.totalRegistros || 0;
+                
+                console.log(`Modalidade ${modalityCode}: ${bidsFromResult.length} licitações na primeira página`);
+                
+                const totalPages = firstPageResult.totalPaginas || 0;
+                
+                // Buscar páginas adicionais se necessário
+                if (totalPages > 1) {
+                    const pagesToFetch = Math.min(totalPages, 10); // Limitar a 10 páginas por modalidade
+                    
+                    for (let page = 2; page <= pagesToFetch; page++) {
+                        const pageResult = await fetchPageForModality(modalityCode, page, baseParams);
+                        if (pageResult && pageResult.data) {
+                            allBids.push(...(pageResult.data || []));
+                        }
+                        
+                        // Delay entre páginas para evitar rate limiting
+                        await new Promise(resolve => setTimeout(resolve, 200));
+                    }
+                }
             }
+            
+            // Delay entre modalidades
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+        } catch (error) {
+            console.error(`Erro ao processar modalidade ${modalityCode}:`, error);
         }
     }
     
