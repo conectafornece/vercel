@@ -90,6 +90,9 @@ const saveToSupabase = async (licitacoes: any[]) => {
   
   console.log(`💾 Salvando ${licitacoes.length} licitações no Supabase...`);
   
+  // Debug: mostrar estrutura dos dados
+  console.log('🔍 Exemplo de licitação a ser salva:', JSON.stringify(licitacoes[0], null, 2));
+  
   const licitacoesFormatadas = licitacoes.map(bid => ({
     id_pncp: bid.id,
     titulo: bid.objetoCompra || 'Objeto não informado',
@@ -104,6 +107,8 @@ const saveToSupabase = async (licitacoes: any[]) => {
     dados_completos: bid
   }));
 
+  console.log('🔍 Exemplo de licitação formatada:', JSON.stringify(licitacoesFormatadas[0], null, 2));
+
   try {
     const response = await fetch(`${SUPABASE_URL}/rest/v1/licitacoes`, {
       method: 'POST',
@@ -114,11 +119,15 @@ const saveToSupabase = async (licitacoes: any[]) => {
       body: JSON.stringify(licitacoesFormatadas)
     });
 
+    const responseText = await response.text();
+    console.log('📤 Resposta do Supabase:', response.status, responseText);
+
     if (response.ok) {
       console.log(`✅ Salvadas ${licitacoesFormatadas.length} licitações`);
       return licitacoesFormatadas.length;
     } else {
       console.error('❌ Erro ao salvar:', response.status, response.statusText);
+      console.error('❌ Detalhes do erro:', responseText);
       return 0;
     }
   } catch (error) {
