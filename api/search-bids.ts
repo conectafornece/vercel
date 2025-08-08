@@ -148,7 +148,7 @@ const saveToSupabase = async (licitacoes: any[]) => {
       municipio: bid.unidadeOrgao?.municipioNome || 'Município não informado',
       municipio_codigo_ibge: bid.unidadeOrgao?.codigoIbge || null,
       uf: bid.unidadeOrgao?.ufSigla || 'UF não informada',
-      valor_estimado: bid.valorTotalEstimado || null, // ← NOVO: Valor da licitação
+      valor_estimado: bid.valorTotalEstimado ? parseFloat(bid.valorTotalEstimado) : null, // ← NOVO: Valor em reais
       processo: bid.processo || null, // ← NOVO: Número do processo
       dados_completos: bid
     };
