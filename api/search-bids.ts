@@ -19,7 +19,7 @@ const CACHE_TTL = 10 * 60 * 1000; // 10 minutos de cache
 if (!global.pncpCache) {
   global.pncpCache = new Map();
 }
-const cache = global.pncpCache;
+const requestCache = global.pncpCache;
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutos de cache
 
 const getCacheKey = (baseParams: URLSearchParams, modalityCodes: string[], keyword?: string, page?: string) => {
@@ -32,7 +32,7 @@ const getCacheKey = (baseParams: URLSearchParams, modalityCodes: string[], keywo
 };
 
 const getCachedResult = (key: string) => {
-  const cached = cache.get(key);
+  const cached = requestCache.get(key);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
     console.log(`📦 Cache HIT para chave: ${key.substring(0, 80)}...`);
     return cached.data;
@@ -41,7 +41,7 @@ const getCachedResult = (key: string) => {
   // Remove cache expirado
   if (cached) {
     console.log(`🗑️ Removendo cache expirado: ${key.substring(0, 80)}...`);
-    cache.delete(key);
+    requestCache.delete(key);
   }
   
   console.log(`❌ Cache MISS para chave: ${key.substring(0, 80)}...`);
@@ -50,17 +50,17 @@ const getCachedResult = (key: string) => {
 
 const setCachedResult = (key: string, data: any) => {
   // Limita o tamanho do cache para evitar consumo excessivo de memória
-  if (cache.size > 100) {
-    const firstKey = cache.keys().next().value;
-    cache.delete(firstKey);
+  if (requestCache.size > 100) {
+    const firstKey = requestCache.keys().next().value;
+    requestCache.delete(firstKey);
   }
   
-  cache.set(key, { 
+  requestCache.set(key, { 
     data, 
     timestamp: Date.now(),
     size: JSON.stringify(data).length 
   });
-  console.log(`💾 Resultado salvo no cache (${cache.size} entradas)`);
+  console.log(`💾 Resultado salvo no cache (${requestCache.size} entradas)`);
 };
 
 const mapBidData = (contratacao: any) => ({
@@ -430,7 +430,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log(`   - Chave: ${cacheKey.substring(0, 100)}...`);
     console.log(`   - Total bruto: ${allBids.length} licitações`);
     console.log(`   - Total filtrado: ${filteredBids.length} licitações`);
-    console.log(`   - Cache entries: ${cache.size}/100`);
+    console.log(`   - Cache entries: ${requestCache.size}/100`);
     
     setCachedResult(cacheKey, resultToCache);
 
