@@ -1,5 +1,4 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { createClient } from '@supabase/supabase-js';
 
 const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/proposta';
 const ALL_MODALITY_CODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '12', '13'];
@@ -8,15 +7,20 @@ const DELAY_BETWEEN_REQUESTS = 100;
 const MAX_RETRIES = 3;
 
 // ===================================================================
-// CONFIGURAÇÃO SUPABASE
+// CONFIGURAÇÃO SUPABASE COM FETCH NATIVO
 // ===================================================================
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_ANON_KEY!
-);
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+
+const supabaseHeaders = {
+  'apikey': SUPABASE_ANON_KEY!,
+  'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+  'Content-Type': 'application/json',
+  'Prefer': 'return=representation'
+};
 
 // ===================================================================
-// FUNÇÕES DE SUPABASE
+// FUNÇÕES DE SUPABASE COM FETCH NATIVO
 // ===================================================================
 
 // Gerar chave de cache para busca
@@ -28,38 +32,45 @@ const generateCacheKey = (uf?: string, city?: string, keyword?: string, modality
 const searchInSupabase = async (uf?: string, city?: string, keyword?: string, page = 1) => {
   console.log('🔍 Buscando no Supabase...');
   
-  let query = supabase
-    .from('licitacoes')
-    .select('*')
-    .order('data_publicacao', { ascending: false });
+  try {
+    let url = `${SUPABASE_URL}/rest/v1/licitacoes?select=*&order=data_publicacao.desc`;
+    
+    // Filtros
+    if (uf && uf !== 'all') {
+      url += `&uf=eq.${uf}`;
+    }
+    
+    if (city && city !== 'all') {
+      url += `&municipio_codigo_ibge=eq.${city}`;
+    }
+    
+    if (keyword && keyword.trim() !== '') {
+      url += `&or=(titulo.ilike.*${keyword}*,orgao.ilike.*${keyword}*)`;
+    }
 
-  // Filtros
-  if (uf && uf !== 'all') {
-    query = query.eq('uf', uf);
-  }
-  
-  if (city && city !== 'all') {
-    query = query.eq('municipio_codigo_ibge', city);
-  }
-  
-  if (keyword && keyword.trim() !== '') {
-    query = query.or(`titulo.ilike.%${keyword}%,orgao.ilike.%${keyword}%`);
-  }
+    // Paginação
+    const limit = 50;
+    const offset = (page - 1) * limit;
+    url += `&limit=${limit}&offset=${offset}`;
 
-  // Paginação
-  const limit = 50; // Buscar mais do Supabase
-  const offset = (page - 1) * limit;
-  query = query.range(offset, offset + limit - 1);
+    const response = await fetch(url, {
+      headers: supabaseHeaders
+    });
 
-  const { data, error, count } = await query;
-  
-  if (error) {
+    if (!response.ok) {
+      console.error('❌ Erro no Supabase:', response.status, response.statusText);
+      return { data: [], count: 0 };
+    }
+
+    const data = await response.json();
+    const count = parseInt(response.headers.get('Content-Range')?.split('/')[1] || '0');
+
+    console.log(`✅ Encontradas ${data?.length || 0} licitações no Supabase`);
+    return { data: data || [], count };
+  } catch (error) {
     console.error('❌ Erro no Supabase:', error);
     return { data: [], count: 0 };
   }
-
-  console.log(`✅ Encontradas ${data?.length || 0} licitações no Supabase`);
-  return { data: data || [], count: count || 0 };
 };
 
 // Salvar licitações no Supabase
@@ -85,59 +96,74 @@ const saveToSupabase = async (licitacoes: any[]) => {
   let saved = 0;
   let errors = 0;
 
-  // Salvar em lotes para evitar timeout
-  const batchSize = 50;
-  for (let i = 0; i < licitacoesFormatadas.length; i += batchSize) {
-    const batch = licitacoesFormatadas.slice(i, i + batchSize);
-    
-    const { error } = await supabase
-      .from('licitacoes')
-      .upsert(batch, { 
-        onConflict: 'id_pncp',
-        ignoreDuplicates: true 
-      });
+  try {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/licitacoes`, {
+      method: 'POST',
+      headers: {
+        ...supabaseHeaders,
+        'Prefer': 'resolution=merge-duplicates'
+      },
+      body: JSON.stringify(licitacoesFormatadas)
+    });
 
-    if (error) {
-      console.error('❌ Erro ao salvar lote:', error);
-      errors += batch.length;
+    if (response.ok) {
+      saved = licitacoesFormatadas.length;
+      console.log(`✅ Salvos: ${saved} licitações`);
     } else {
-      saved += batch.length;
+      errors = licitacoesFormatadas.length;
+      console.error('❌ Erro ao salvar:', response.status, response.statusText);
     }
+  } catch (error) {
+    errors = licitacoesFormatadas.length;
+    console.error('❌ Erro ao salvar:', error);
   }
 
-  console.log(`✅ Salvos: ${saved}, Erros: ${errors}`);
   return { saved, errors };
 };
 
 // Verificar se precisa atualizar cache
 const needsRefresh = async (cacheKey: string) => {
-  const { data } = await supabase
-    .from('cache_buscas')
-    .select('ultima_atualizacao')
-    .eq('chave_busca', cacheKey)
-    .single();
+  try {
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/cache_buscas?chave_busca=eq.${cacheKey}&select=ultima_atualizacao`,
+      { headers: supabaseHeaders }
+    );
 
-  if (!data) return true;
+    if (!response.ok) return true;
 
-  const agora = new Date();
-  const ultimaAtualizacao = new Date(data.ultima_atualizacao);
-  const diffHoras = (agora.getTime() - ultimaAtualizacao.getTime()) / (1000 * 60 * 60);
+    const data = await response.json();
+    if (!data.length) return true;
 
-  return diffHoras > 6; // Atualizar a cada 6 horas
+    const agora = new Date();
+    const ultimaAtualizacao = new Date(data[0].ultima_atualizacao);
+    const diffHoras = (agora.getTime() - ultimaAtualizacao.getTime()) / (1000 * 60 * 60);
+
+    return diffHoras > 6; // Atualizar a cada 6 horas
+  } catch (error) {
+    console.error('❌ Erro ao verificar cache:', error);
+    return true; // Se der erro, atualizar
+  }
 };
 
 // Atualizar cache de busca
 const updateCacheRecord = async (cacheKey: string, totalEncontrado: number, parametros: any) => {
-  await supabase
-    .from('cache_buscas')
-    .upsert({
-      chave_busca: cacheKey,
-      parametros,
-      total_encontrado: totalEncontrado,
-      ultima_atualizacao: new Date().toISOString()
-    }, {
-      onConflict: 'chave_busca'
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/cache_buscas`, {
+      method: 'POST',
+      headers: {
+        ...supabaseHeaders,
+        'Prefer': 'resolution=merge-duplicates'
+      },
+      body: JSON.stringify({
+        chave_busca: cacheKey,
+        parametros,
+        total_encontrado: totalEncontrado,
+        ultima_atualizacao: new Date().toISOString()
+      })
     });
+  } catch (error) {
+    console.error('❌ Erro ao atualizar cache:', error);
+  }
 };
 
 const mapBidData = (contratacao: any) => ({
