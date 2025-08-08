@@ -15,8 +15,14 @@ const CACHE_TTL = 10 * 60 * 1000; // 10 minutos de cache
 // ===================================================================
 // SISTEMA DE CACHE COM CHAVE MAIS GRANULAR
 // ===================================================================
-const cache = new Map();
+let cache = new Map();
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutos de cache
+
+// Garantir que o cache existe mesmo entre reinicializações
+if (!global.pncpCache) {
+  global.pncpCache = new Map();
+}
+cache = global.pncpCache;
 
 const getCacheKey = (baseParams: URLSearchParams, modalityCodes: string[], keyword?: string, page?: string) => {
   // Chave mais específica incluindo parâmetros importantes
