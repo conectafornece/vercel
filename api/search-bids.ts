@@ -6,6 +6,47 @@ const MAX_PAGES_TO_FETCH = 50; // Reduzido para evitar timeouts
 const DELAY_BETWEEN_REQUESTS = 100; // 100ms entre requisições
 const MAX_RETRIES = 3;
 
+// ===================================================================
+// SISTEMA DE CACHE SIMPLES EM MEMÓRIA
+// ===================================================================
+const cache = new Map();
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutos de cache
+
+const getCacheKey = (baseParams: URLSearchParams, modalityCodes: string[], keyword?: string) => {
+  const key = `${baseParams.toString()}_${modalityCodes.join(',')}_${keyword || ''}`;
+  return key;
+};
+
+const getCachedResult = (key: string) => {
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    console.log('📦 Resultado encontrado no cache!');
+    return cached.data;
+  }
+  
+  // Remove cache expirado
+  if (cached) {
+    cache.delete(key);
+  }
+  
+  return null;
+};
+
+const setCachedResult = (key: string, data: any) => {
+  // Limita o tamanho do cache para evitar consumo excessivo de memória
+  if (cache.size > 100) {
+    const firstKey = cache.keys().next().value;
+    cache.delete(firstKey);
+  }
+  
+  cache.set(key, { 
+    data, 
+    timestamp: Date.now(),
+    size: JSON.stringify(data).length 
+  });
+  console.log(`💾 Resultado salvo no cache (${cache.size} entradas)`);
+};
+
 const mapBidData = (contratacao: any) => ({
   id_unico: contratacao.id,
   titulo: contratacao.objetoCompra || 'Objeto não informado',
@@ -124,6 +165,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       baseParams.append('uf', uf as string);
     }
 
+    // ===================================================================
+    // VERIFICAR CACHE ANTES DE FAZER REQUISIÇÕES
+    // ===================================================================
+    const cacheKey = getCacheKey(baseParams, modalityCodes, keyword as string);
+    const cachedResult = getCachedResult(cacheKey);
+    
+    if (cachedResult) {
+      // Aplicar paginação no resultado do cache
+      const finalPage = parseInt(page as string, 10);
+      const itemsPerPage = 10;
+      const paginatedItems = cachedResult.filteredBids.slice((finalPage - 1) * itemsPerPage, finalPage * itemsPerPage);
+      
+      return res.status(200).json({
+        data: paginatedItems.map(mapBidData),
+        total: cachedResult.totalAggregatedResults,
+        totalPages: Math.ceil(cachedResult.filteredBids.length / itemsPerPage) || 1,
+        cached: true, // Indica que veio do cache
+        warning: cachedResult.warning || null
+      });
+    }
+
     console.log(`Iniciando busca com ${modalityCodes.length} modalidades`);
 
     // Buscar primeira página de cada modalidade com controle sequencial
@@ -209,6 +271,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     
     filteredBids.sort((a, b) => new Date(b.dataPublicacaoPncp).getTime() - new Date(a.dataPublicacaoPncp).getTime());
 
+    const warning = uf && uf !== 'all' && (!city || city === 'all') ? 
+      'Busca em estado limitada a algumas modalidades para evitar timeout' : null;
+
+    // ===================================================================
+    // SALVAR NO CACHE ANTES DE RETORNAR
+    // ===================================================================
+    const resultToCache = {
+      filteredBids,
+      totalAggregatedResults,
+      warning
+    };
+    setCachedResult(cacheKey, resultToCache);
+
     const finalPage = parseInt(page as string, 10);
     const itemsPerPage = 10;
     const paginatedItems = filteredBids.slice((finalPage - 1) * itemsPerPage, finalPage * itemsPerPage);
@@ -219,8 +294,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       data: mappedData,
       total: totalAggregatedResults,
       totalPages: Math.ceil(filteredBids.length / itemsPerPage) || 1,
-      warning: uf && uf !== 'all' && (!city || city === 'all') ? 
-        'Busca em estado limitada a algumas modalidades para evitar timeout' : null
+      cached: false, // Indica que é um resultado novo
+      warning
     });
 
   } catch (error: any) {
