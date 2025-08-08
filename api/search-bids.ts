@@ -289,30 +289,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { uf, city, page = '1', keyword } = req.query;
     const pageNum = parseInt(page as string, 10);
 
-    console.log(`🚀 Busca híbrida: UF=${uf}, City=${city}, Keyword=${keyword}`);
+    console.log(`🚀 Busca híbrida: UF=${uf}, City=${city}, Keyword=${keyword}, Page=${pageNum}`);
 
     // ===================================================================
-    // ETAPA 1: BUSCAR NO SUPABASE (sempre)
+    // CORREÇÃO: Só buscar dados novos na primeira página
     // ===================================================================
     let supabaseResults = await searchInSupabase(uf as string, city as string, keyword as string);
 
-    // ===================================================================
-    // ETAPA 2: BUSCAR NA API PNCP (sempre)
-    // ===================================================================
-    console.log('🔄 Buscando dados atuais da API PNCP...');
-    const pncpResults = await searchInPNCP(uf as string, city as string, keyword as string);
-    
-    if (pncpResults.length > 0) {
-      console.log(`💾 Encontrados ${pncpResults.length} novos registros no PNCP`);
-      await saveToSupabase(pncpResults);
+    // OTIMIZAÇÃO: Só buscar no PNCP se for página 1 E se tiver poucos resultados
+    if (pageNum === 1 && supabaseResults.length < 10) {
+      console.log('🔄 Primeira página com poucos dados - buscando no PNCP...');
+      const pncpResults = await searchInPNCP(uf as string, city as string, keyword as string);
       
-      // Buscar novamente no Supabase para pegar dados atualizados
-      supabaseResults = await searchInSupabase(uf as string, city as string, keyword as string);
-      console.log(`🔄 Dados atualizados: ${supabaseResults.length} resultados`);
+      if (pncpResults.length > 0) {
+        console.log(`💾 Encontrados ${pncpResults.length} novos registros no PNCP`);
+        await saveToSupabase(pncpResults);
+        
+        // Buscar novamente no Supabase para pegar dados atualizados
+        supabaseResults = await searchInSupabase(uf as string, city as string, keyword as string);
+        console.log(`🔄 Dados atualizados: ${supabaseResults.length} resultados`);
+      }
     }
 
     // ===================================================================
-    // ETAPA 3: RETORNAR TODOS OS DADOS (sem filtro de modalidade)
+    // ETAPA 3: PROCESSAR E PAGINAR RESULTADOS
     // ===================================================================
     let allResults = supabaseResults;
     
@@ -324,22 +324,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Ordenar por data de publicação (mais recente primeiro)
     uniqueResults.sort((a, b) => new Date(b.data_publicacao).getTime() - new Date(a.data_publicacao).getTime());
 
-    // Paginação básica
-    const itemsPerPage = 20;
+    // CORREÇÃO: Paginação sem buscar dados novos
+    const itemsPerPage = 10;
     const totalPages = Math.ceil(uniqueResults.length / itemsPerPage);
     const startIndex = (pageNum - 1) * itemsPerPage;
     const paginatedResults = uniqueResults.slice(startIndex, startIndex + itemsPerPage);
 
-    console.log(`✅ Retornando ${paginatedResults.length} de ${uniqueResults.length} resultados únicos`);
+    console.log(`✅ Página ${pageNum}/${totalPages}: Retornando ${paginatedResults.length} de ${uniqueResults.length} resultados únicos`);
 
     return res.status(200).json({
       data: paginatedResults,
       total: uniqueResults.length,
       totalPages,
-      source: 'hybrid',
-      supabaseCount: supabaseResults.length,
-      pncpCount: pncpResults.length,
-      warning: null
+      currentPage: pageNum,
+      hasNextPage: pageNum < totalPages,
+      hasPrevPage: pageNum > 1,
+      source: pageNum === 1 ? 'hybrid' : 'supabase-only',
+      warning: pageNum > 1 ? 'Dados da sessão anterior' : null
     });
 
   } catch (error: any) {
