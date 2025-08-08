@@ -31,7 +31,7 @@ function formatDateToYYYYMMDD(date: Date): string {
 }
 
 const mapBidData = (item: any, fonte = 'PNCP') => ({
-  id_unico: item.id_pncp || item.id,
+  id_unico: item.id_pncp || item.numeroControlePNCP || item.id,
   titulo: item.titulo || item.objetoCompra || 'Objeto não informado',
   orgao: item.orgao || item.orgaoEntidade?.razaoSocial || 'Órgão não informado',
   modalidade: item.modalidade || item.modalidadeNome || 'Modalidade não informada',
@@ -84,17 +84,18 @@ const searchInSupabase = async (uf?: string, city?: string, keyword?: string) =>
   }
 };
 
-// Salvar no Supabase
+// Salvar no Supabase - VERSÃO CORRIGIDA
 const saveToSupabase = async (licitacoes: any[]) => {
   if (!licitacoes.length) return 0;
   
   console.log(`💾 Salvando ${licitacoes.length} licitações no Supabase...`);
   
   // Debug: mostrar estrutura dos dados
-  console.log('🔍 Exemplo de licitação a ser salva:', JSON.stringify(licitacoes[0], null, 2));
+  console.log('🔍 Exemplo de licitação da API PNCP:', JSON.stringify(licitacoes[0], null, 2));
   
   const licitacoesFormatadas = licitacoes.map(bid => ({
-    id_pncp: bid.id,
+    // CORREÇÃO: Usar numeroControlePNCP como id_pncp
+    id_pncp: bid.numeroControlePNCP || `${bid.orgaoEntidade?.cnpj}-${bid.anoCompra}-${bid.sequencialCompra}`,
     titulo: bid.objetoCompra || 'Objeto não informado',
     orgao: bid.orgaoEntidade?.razaoSocial || 'Órgão não informado',
     modalidade: bid.modalidadeNome || 'Modalidade não informada',
@@ -133,49 +134,6 @@ const saveToSupabase = async (licitacoes: any[]) => {
   } catch (error) {
     console.error('❌ Erro ao salvar:', error);
     return 0;
-  }
-};
-
-// Verificar se precisa buscar dados novos
-const needsRefresh = async (cacheKey: string) => {
-  try {
-    const response = await fetch(
-      `${SUPABASE_URL}/rest/v1/cache_buscas?chave_busca=eq.${cacheKey}&select=ultima_atualizacao`,
-      { headers: supabaseHeaders }
-    );
-
-    if (!response.ok) return true;
-
-    const data = await response.json();
-    if (!data.length) return true;
-
-    const agora = new Date();
-    const ultimaAtualizacao = new Date(data[0].ultima_atualizacao);
-    const diffHoras = (agora.getTime() - ultimaAtualizacao.getTime()) / (1000 * 60 * 60);
-
-    return diffHoras > 6; // Atualizar a cada 6 horas
-  } catch (error) {
-    return true; // Se der erro, atualizar
-  }
-};
-
-// Atualizar registro de cache
-const updateCacheRecord = async (cacheKey: string, totalEncontrado: number) => {
-  try {
-    await fetch(`${SUPABASE_URL}/rest/v1/cache_buscas`, {
-      method: 'POST',
-      headers: {
-        ...supabaseHeaders,
-        'Prefer': 'resolution=merge-duplicates'
-      },
-      body: JSON.stringify({
-        chave_busca: cacheKey,
-        total_encontrado: totalEncontrado,
-        ultima_atualizacao: new Date().toISOString()
-      })
-    });
-  } catch (error) {
-    console.error('❌ Erro ao atualizar cache:', error);
   }
 };
 
@@ -304,7 +262,7 @@ const searchInPNCP = async (uf?: string, city?: string, keyword?: string, modali
 };
 
 // ===================================================================
-// HANDLER PRINCIPAL
+// HANDLER PRINCIPAL - LÓGICA SIMPLIFICADA
 // ===================================================================
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -322,40 +280,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log(`🚀 Busca híbrida: UF=${uf}, City=${city}, Keyword=${keyword}`);
 
     // ===================================================================
-    // ETAPA 1: BUSCAR NO SUPABASE
+    // ETAPA 1: BUSCAR NO SUPABASE (sempre)
     // ===================================================================
     let supabaseResults = await searchInSupabase(uf as string, city as string, keyword as string);
 
     // ===================================================================
-    // ETAPA 2: VERIFICAR SE PRECISA ATUALIZAR
+    // ETAPA 2: BUSCAR NA API PNCP (sempre, independente dos resultados do Supabase)
     // ===================================================================
-    const cacheKey = `${uf || 'all'}_${city || 'all'}_${keyword || 'none'}`;
-    const precisaAtualizar = await needsRefresh(cacheKey);
-
-    console.log(`📊 Supabase: ${supabaseResults.length} resultados. Precisa atualizar: ${precisaAtualizar}`);
-
-    // ===================================================================
-    // ETAPA 3: BUSCAR NA API PNCP SE NECESSÁRIO
-    // ===================================================================
-    if (precisaAtualizar || supabaseResults.length < 5) {
-      const pncpResults = await searchInPNCP(uf as string, city as string, keyword as string, modality as string);
+    console.log('🔄 Buscando dados atuais da API PNCP...');
+    const pncpResults = await searchInPNCP(uf as string, city as string, keyword as string, modality as string);
+    
+    if (pncpResults.length > 0) {
+      console.log(`💾 Encontrados ${pncpResults.length} novos registros no PNCP`);
+      await saveToSupabase(pncpResults);
       
-      if (pncpResults.length > 0) {
-        await saveToSupabase(pncpResults);
-        await updateCacheRecord(cacheKey, pncpResults.length);
-        
-        // Buscar novamente no Supabase para pegar dados atualizados
-        supabaseResults = await searchInSupabase(uf as string, city as string, keyword as string);
-        console.log(`🔄 Dados atualizados: ${supabaseResults.length} resultados`);
-      }
+      // Buscar novamente no Supabase para pegar dados atualizados
+      supabaseResults = await searchInSupabase(uf as string, city as string, keyword as string);
+      console.log(`🔄 Dados atualizados: ${supabaseResults.length} resultados`);
     }
 
     // ===================================================================
-    // ETAPA 4: PROCESSAR E RETORNAR RESULTADOS
+    // ETAPA 3: PROCESSAR E RETORNAR RESULTADOS
     // ===================================================================
     let allResults = supabaseResults.map(item => mapBidData(item, 'Supabase'));
     
-    // Filtro adicional se necessário
+    // Filtro adicional por palavra-chave se necessário
     if (keyword && keyword.trim() !== '') {
       const lowercaseKeyword = keyword.toLowerCase();
       allResults = allResults.filter(item =>
@@ -365,22 +314,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       );
     }
 
-    // Ordenar por data
-    allResults.sort((a, b) => new Date(b.data_publicacao).getTime() - new Date(a.data_publicacao).getTime());
+    // Remover duplicatas baseado no id_unico
+    const uniqueResults = allResults.filter((item, index, self) => 
+      index === self.findIndex(t => t.id_unico === item.id_unico)
+    );
+
+    // Ordenar por data de publicação (mais recente primeiro)
+    uniqueResults.sort((a, b) => new Date(b.data_publicacao).getTime() - new Date(a.data_publicacao).getTime());
 
     // Paginação
     const itemsPerPage = 10;
-    const totalPages = Math.ceil(allResults.length / itemsPerPage);
+    const totalPages = Math.ceil(uniqueResults.length / itemsPerPage);
     const startIndex = (pageNum - 1) * itemsPerPage;
-    const paginatedResults = allResults.slice(startIndex, startIndex + itemsPerPage);
+    const paginatedResults = uniqueResults.slice(startIndex, startIndex + itemsPerPage);
 
-    console.log(`✅ Retornando ${paginatedResults.length} de ${allResults.length} resultados`);
+    console.log(`✅ Retornando ${paginatedResults.length} de ${uniqueResults.length} resultados únicos`);
 
     return res.status(200).json({
       data: paginatedResults,
-      total: allResults.length,
+      total: uniqueResults.length,
       totalPages,
-      source: 'supabase',
+      source: 'hybrid',
+      supabaseCount: supabaseResults.length,
+      pncpCount: pncpResults.length,
       warning: null
     });
 
