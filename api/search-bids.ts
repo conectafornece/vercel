@@ -10,13 +10,14 @@ const mapBidData = (contratacao: any) => ({
   orgao: contratacao.orgaoEntidade ? contratacao.orgaoEntidade.razaoSocial : 'Órgão não informado',
   modalidade: contratacao.modalidadeNome || (contratacao.modalidade ? contratacao.modalidade.nome : 'Modalidade não informada'),
   data_publicacao: contratacao.dataPublicacaoPncp,
-  link_oficial: `https://www.gov.br/pncp/pt-br/contrato/-/contratos/${contratacao.numeroControlePNCP}`,
+  link_oficial: contratacao.linkSistemaOrigem || `https://pncp.gov.br/app/editais/${contratacao.orgaoEntidade?.cnpj}/${contratacao.anoCompra}/${contratacao.sequencialCompra}`,
   status: contratacao.situacaoCompraNome || (contratacao.situacao ? contratacao.situacao.nome : 'Situação não informada'),
   municipio: contratacao.unidadeOrgao ? contratacao.unidadeOrgao.municipioNome : 'Município não informado',
   municipio_codigo_ibge: contratacao.unidadeOrgao ? contratacao.unidadeOrgao.codigoIbge : null,
   uf: contratacao.unidadeOrgao ? contratacao.unidadeOrgao.ufSigla : 'UF não informada',
   fonte: 'PNCP (Consulta Ativa)',
 });
+
 
 function formatDateToYYYYMMDD(date: Date): string {
   const year = date.getFullYear();
