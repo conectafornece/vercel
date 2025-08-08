@@ -244,14 +244,10 @@ const fetchPageForModality = async (modalityCode: string, page: number, basePara
 const searchInPNCP = async (uf?: string, city?: string, keyword?: string, modality?: string) => {
   console.log('🌐 Buscando na API PNCP...');
   
-  // Determinar modalidades
+  // Determinar modalidades - BUSCAR TODAS
   let modalityCodes: string[];
   if (!modality || modality === 'all' || modality === '') {
-    if (uf && uf !== 'all' && (!city || city === 'all')) {
-      modalityCodes = ['1', '2', '3', '4', '5', '6', '7', '8']; // Incluir modalidades importantes
-    } else {
-      modalityCodes = ALL_MODALITY_CODES;
-    }
+    modalityCodes = ALL_MODALITY_CODES; // Buscar todas as modalidades sempre
   } else {
     modalityCodes = modality.split(',');
   }
@@ -276,6 +272,8 @@ const searchInPNCP = async (uf?: string, city?: string, keyword?: string, modali
   } else if (uf && uf !== 'all') {
     baseParams.append('uf', uf);
   }
+
+  console.log(`🎯 Modalidades selecionadas: ${modalityCodes.join(', ')}`);
 
   let allBids: any[] = [];
   
