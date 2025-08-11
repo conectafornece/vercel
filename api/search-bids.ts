@@ -3,8 +3,9 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/proposta';
 // CÓDIGOS CORRETOS DAS MODALIDADES CONFORME MANUAL OFICIAL PNCP
 const ALL_MODALITY_CODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'];
-const DELAY_BETWEEN_REQUESTS = 100;
+const DELAY_BETWEEN_REQUESTS = 150;
 const MAX_RETRIES = 3;
+const MAX_PAGE_SIZE = 500; // ← NOVO: Tamanho máximo da página conforme documentação
 
 // ===================================================================
 // CONFIGURAÇÃO SUPABASE COM FETCH NATIVO
@@ -123,7 +124,7 @@ const saveToSupabase = async (licitacoes: any[]) => {
       titulo: bid.objetoCompra || 'Objeto não informado',
       orgao: bid.orgaoEntidade?.razaoSocial || 'Órgão não informado',
       modalidade: bid.modalidadeNome || 'Modalidade não informada',
-      modalidade_codigo: bid.modalidadeId || null, // ← NOVO: Salvar código da modalidade
+      modalidade_codigo: bid.modalidadeId || null,
       data_publicacao: formatDate(bid.dataPublicacaoPncp),
       data_abertura_proposta: formatDate(bid.dataAberturaProposta),
       data_encerramento_proposta: formatDate(bid.dataEncerramentoProposta),
@@ -144,7 +145,7 @@ const saveToSupabase = async (licitacoes: any[]) => {
       method: 'POST',
       headers: {
         ...supabaseHeaders,
-        'Prefer': 'resolution=ignore-duplicates' // CORREÇÃO: Ignorar duplicatas em vez de merge
+        'Prefer': 'resolution=ignore-duplicates'
       },
       body: JSON.stringify(licitacoesFormatadas)
     });
@@ -164,7 +165,7 @@ const saveToSupabase = async (licitacoes: any[]) => {
 };
 
 // ===================================================================
-// FUNÇÕES DA API PNCP
+// FUNÇÕES DA API PNCP - CORRIGIDAS
 // ===================================================================
 
 const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> => {
@@ -173,7 +174,7 @@ const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> 
       console.log(`Tentativa ${attempt}: ${url.substring(0, 100)}...`);
       
       const response = await fetch(url, { 
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(10000), // ← Aumentado timeout
         headers: { 
           'Accept': 'application/json',
           'User-Agent': 'Mozilla/5.0 (compatible; PNCP-Client/1.0)'
@@ -209,32 +210,67 @@ const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> 
   return null;
 };
 
-const fetchPageForModality = async (modalityCode: string, page: number, baseParams: URLSearchParams) => {
-  const params = new URLSearchParams(baseParams);
-  params.set('pagina', String(page));
-  params.append('codigoModalidadeContratacao', modalityCode);
-  
-  const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
-  
-  await delay(DELAY_BETWEEN_REQUESTS);
-  return await fetchWithRetry(url);
+// ===================================================================
+// CORREÇÃO PRINCIPAL: Buscar TODAS as páginas para cada modalidade
+// ===================================================================
+const fetchAllPagesForModality = async (modalityCode: string, baseParams: URLSearchParams) => {
+  const allData: any[] = [];
+  let page = 1;
+  let hasMorePages = true;
+
+  console.log(`🎯 Buscando modalidade ${modalityCode}...`);
+
+  while (hasMorePages) {
+    const params = new URLSearchParams(baseParams);
+    params.set('pagina', String(page));
+    params.append('codigoModalidadeContratacao', modalityCode);
+    params.append('tamanhoPagina', String(MAX_PAGE_SIZE)); // ← CORREÇÃO: Adicionar tamanhoPagina
+    
+    const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
+    
+    await delay(DELAY_BETWEEN_REQUESTS);
+    const data = await fetchWithRetry(url);
+    
+    if (data && data.data && data.data.length > 0) {
+      allData.push(...data.data);
+      console.log(`📄 Modalidade ${modalityCode} - Página ${page}: ${data.data.length} registros`);
+      
+      // Verificar se há mais páginas
+      hasMorePages = page < (data.totalPaginas || 1);
+      page++;
+      
+      // Proteção: não buscar mais de 10 páginas por modalidade
+      if (page > 10) {
+        console.log(`⚠️ Limitando busca a 10 páginas para modalidade ${modalityCode}`);
+        hasMorePages = false;
+      }
+    } else {
+      hasMorePages = false;
+    }
+  }
+
+  console.log(`✅ Modalidade ${modalityCode}: Total de ${allData.length} registros coletados`);
+  return allData;
 };
 
-// Buscar na API PNCP - SEMPRE busca todas as modalidades
+// Buscar na API PNCP - CORREÇÃO: Buscar todas as páginas
 const searchInPNCP = async (uf?: string, city?: string, keyword?: string) => {
   console.log('🌐 Buscando na API PNCP...');
   
-  // SEMPRE buscar todas as modalidades - filtro será no frontend
+  // SEMPRE buscar todas as modalidades
   const modalityCodes = ALL_MODALITY_CODES;
   console.log(`🎯 Buscando todas as modalidades: ${modalityCodes.join(', ')}`);
 
-  // Parâmetros base - CORREÇÃO: Remover filtro de data inicial para pegar mais resultados
+  // Parâmetros base - CORREÇÃO: Usar filtro de data mais amplo
   const baseParams = new URLSearchParams();
   const today = new Date();
+  const pastDate = new Date();
+  pastDate.setDate(today.getDate() - 30); // ← CORREÇÃO: Buscar últimos 30 dias
   const futureDate = new Date();
   futureDate.setDate(today.getDate() + 60);
   
-  // Apenas data final, sem data inicial para capturar mais licitações
+  // CORREÇÃO: Usar tanto dataInicial quanto dataFinal para pegar mais resultados
+  baseParams.append('dataInicial', formatDateToYYYYMMDD(pastDate));
   baseParams.append('dataFinal', formatDateToYYYYMMDD(futureDate));
 
   if (city && city !== 'all') {
@@ -245,36 +281,22 @@ const searchInPNCP = async (uf?: string, city?: string, keyword?: string) => {
 
   let allBids: any[] = [];
   
-  // Buscar por modalidade
+  // CORREÇÃO: Buscar TODAS as páginas por modalidade
   for (const modalityCode of modalityCodes) {
     try {
-      const data = await fetchPageForModality(modalityCode, 1, baseParams);
-      
-      if (data && data.data) {
-        allBids.push(...data.data);
-        
-        // Se tem palavra-chave, buscar mais páginas
-        if (keyword && keyword.trim() !== '' && data.totalPaginas > 1) {
-          const maxPages = Math.min(data.totalPaginas, 5);
-          for (let page = 2; page <= maxPages; page++) {
-            const pageData = await fetchPageForModality(modalityCode, page, baseParams);
-            if (pageData && pageData.data) {
-              allBids.push(...pageData.data);
-            }
-          }
-        }
-      }
+      const modalityData = await fetchAllPagesForModality(modalityCode, baseParams);
+      allBids.push(...modalityData);
     } catch (error) {
       console.error(`❌ Erro modalidade ${modalityCode}:`, error);
     }
   }
 
-  console.log(`📡 PNCP: ${allBids.length} licitações coletadas`);
+  console.log(`📡 PNCP: ${allBids.length} licitações coletadas no total`);
   return allBids;
 };
 
 // ===================================================================
-// HANDLER PRINCIPAL - SEM FILTRO DE MODALIDADE
+// HANDLER PRINCIPAL
 // ===================================================================
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -297,7 +319,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let supabaseResults = await searchInSupabase(uf as string, city as string, keyword as string);
 
     // OTIMIZAÇÃO: Só buscar no PNCP se for página 1 E se tiver poucos resultados
-    if (pageNum === 1 && supabaseResults.length < 10) {
+    if (pageNum === 1 && supabaseResults.length < 20) {
       console.log('🔄 Primeira página com poucos dados - buscando no PNCP...');
       const pncpResults = await searchInPNCP(uf as string, city as string, keyword as string);
       
@@ -324,7 +346,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Ordenar por data de publicação (mais recente primeiro)
     uniqueResults.sort((a, b) => new Date(b.data_publicacao).getTime() - new Date(a.data_publicacao).getTime());
 
-    // CORREÇÃO: Paginação sem buscar dados novos
+    // Paginação
     const itemsPerPage = 10;
     const totalPages = Math.ceil(uniqueResults.length / itemsPerPage);
     const startIndex = (pageNum - 1) * itemsPerPage;
@@ -340,7 +362,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       hasNextPage: pageNum < totalPages,
       hasPrevPage: pageNum > 1,
       source: pageNum === 1 ? 'hybrid' : 'supabase-only',
-      warning: pageNum > 1 ? 'Dados da sessão anterior' : null
+      warning: pageNum > 1 ? 'Dados da sessão anterior' : null,
+      debug: {
+        modalitiesSearched: ALL_MODALITY_CODES.length,
+        maxPageSize: MAX_PAGE_SIZE
+      }
     });
 
   } catch (error: any) {
