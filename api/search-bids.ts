@@ -213,7 +213,36 @@ const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> 
   return null;
 };
 
-// Removido fetchPageForModality - substituído pela nova função searchInPNCP
+// ===================================================================
+// FUNÇÃO IMPLEMENTADA: fetchPageForModality
+// ===================================================================
+const fetchPageForModality = async (modalityCode: string, page: number, baseParams: URLSearchParams): Promise<any> => {
+  try {
+    // Criar uma cópia dos parâmetros base para não modificar o original
+    const params = new URLSearchParams(baseParams);
+    params.append('modalidadeContratacao', modalityCode);
+    params.append('pagina', page.toString());
+    params.append('tamanhoPagina', '20'); // Tamanho da página
+    
+    // Usar o endpoint correto para licitações publicadas
+    const url = `${PNCP_API_PUBLICACAO}?${params.toString()}`;
+    
+    console.log(`🔍 Buscando modalidade ${modalityCode}, página ${page}...`);
+    
+    const data = await fetchWithRetry(url);
+    
+    if (data) {
+      console.log(`✅ Modalidade ${modalityCode}: ${data.data?.length || 0} resultados`);
+      return data;
+    }
+    
+    return { data: [], totalRegistros: 0, totalPaginas: 0 };
+    
+  } catch (error) {
+    console.error(`❌ Erro modalidade ${modalityCode}:`, error);
+    return { data: [], totalRegistros: 0, totalPaginas: 0 };
+  }
+};
 
 // Buscar na API PNCP - SEMPRE busca todas as modalidades
 const searchInPNCP = async (uf?: string, city?: string, keyword?: string) => {
@@ -256,11 +285,19 @@ const searchInPNCP = async (uf?: string, city?: string, keyword?: string) => {
             if (pageData && pageData.data) {
               allBids.push(...pageData.data);
             }
+            // Delay entre requisições para evitar rate limiting
+            await delay(DELAY_BETWEEN_REQUESTS);
           }
         }
       }
+      
+      // Delay entre modalidades para evitar rate limiting
+      await delay(DELAY_BETWEEN_REQUESTS);
+      
     } catch (error) {
       console.error(`❌ Erro modalidade ${modalityCode}:`, error);
+      // Continue com a próxima modalidade mesmo se uma falhar
+      continue;
     }
   }
 
