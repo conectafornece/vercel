@@ -1,9 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const PNCP_API_BASE_URL = 'https://pncp.gov.br/api/consulta/v1/contratacoes/proposta';
-const DELAY_BETWEEN_REQUESTS = 200;
+// CÓDIGOS CORRETOS DAS MODALIDADES CONFORME MANUAL OFICIAL PNCP
+const ALL_MODALITY_CODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'];
+const DELAY_BETWEEN_REQUESTS = 100;
 const MAX_RETRIES = 3;
-const MAX_PAGE_SIZE = 500;
 
 // ===================================================================
 // CONFIGURAÇÃO SUPABASE COM FETCH NATIVO
@@ -31,15 +32,17 @@ function formatDateToYYYYMMDD(date: Date): string {
 }
 
 // ===================================================================
-// FUNÇÕES SUPABASE
+// FUNÇÕES SUPABASE - APENAS FILTROS BÁSICOS
 // ===================================================================
 
+// Buscar no Supabase - SEM filtro de modalidade
 const searchInSupabase = async (uf?: string, city?: string, keyword?: string) => {
   console.log('🔍 Buscando no Supabase...');
   
   try {
     let url = `${SUPABASE_URL}/rest/v1/licitacoes?select=*&order=data_publicacao.desc.nullslast&limit=200`;
     
+    // Apenas filtros básicos - modalidade será filtrada no frontend
     if (uf && uf !== 'all') {
       url += `&uf=eq.${uf}`;
     }
@@ -68,12 +71,14 @@ const searchInSupabase = async (uf?: string, city?: string, keyword?: string) =>
   }
 };
 
+// Salvar no Supabase
 const saveToSupabase = async (licitacoes: any[]) => {
   if (!licitacoes.length) return 0;
   
   console.log(`💾 Salvando ${licitacoes.length} licitações no Supabase...`);
   
   const licitacoesFormatadas = licitacoes.map(bid => {
+    // Função para converter data ISO para formato YYYY-MM-DD
     const formatDate = (dateString: string | null) => {
       if (!dateString) return null;
       try {
@@ -83,36 +88,42 @@ const saveToSupabase = async (licitacoes: any[]) => {
       }
     };
 
+    // Determinar data de expiração baseada no status e datas disponíveis
     const getDataExpiracao = () => {
+      // Se tem data de encerramento de proposta, usar ela + 30 dias
       if (bid.dataEncerramentoProposta) {
         const dataEncerramento = new Date(bid.dataEncerramentoProposta);
         dataEncerramento.setDate(dataEncerramento.getDate() + 30);
         return dataEncerramento.toISOString().split('T')[0];
       }
       
+      // Se tem data de abertura, usar ela + 60 dias
       if (bid.dataAberturaProposta) {
         const dataAbertura = new Date(bid.dataAberturaProposta);
         dataAbertura.setDate(dataAbertura.getDate() + 60);
         return dataAbertura.toISOString().split('T')[0];
       }
       
+      // Caso contrário, usar data de publicação + 90 dias
       if (bid.dataPublicacaoPncp) {
         const dataPublicacao = new Date(bid.dataPublicacaoPncp);
         dataPublicacao.setDate(dataPublicacao.getDate() + 90);
         return dataPublicacao.toISOString().split('T')[0];
       }
       
+      // Fallback: hoje + 90 dias
       const hoje = new Date();
       hoje.setDate(hoje.getDate() + 90);
       return hoje.toISOString().split('T')[0];
     };
 
     return {
+      // CORREÇÃO: Usar apenas numeroControlePNCP como chave única
       id_pncp: bid.numeroControlePNCP,
       titulo: bid.objetoCompra || 'Objeto não informado',
       orgao: bid.orgaoEntidade?.razaoSocial || 'Órgão não informado',
       modalidade: bid.modalidadeNome || 'Modalidade não informada',
-      modalidade_codigo: bid.modalidadeId || null,
+      modalidade_codigo: bid.modalidadeId || null, // ← NOVO: Salvar código da modalidade
       data_publicacao: formatDate(bid.dataPublicacaoPncp),
       data_abertura_proposta: formatDate(bid.dataAberturaProposta),
       data_encerramento_proposta: formatDate(bid.dataEncerramentoProposta),
@@ -133,7 +144,7 @@ const saveToSupabase = async (licitacoes: any[]) => {
       method: 'POST',
       headers: {
         ...supabaseHeaders,
-        'Prefer': 'resolution=ignore-duplicates'
+        'Prefer': 'resolution=ignore-duplicates' // CORREÇÃO: Ignorar duplicatas em vez de merge
       },
       body: JSON.stringify(licitacoesFormatadas)
     });
@@ -153,16 +164,16 @@ const saveToSupabase = async (licitacoes: any[]) => {
 };
 
 // ===================================================================
-// FUNÇÕES DA API PNCP - CORRIGIDAS BASEADAS NO EXEMPLO QUE FUNCIONA
+// FUNÇÕES DA API PNCP
 // ===================================================================
 
 const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> => {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      console.log(`Tentativa ${attempt}: ${url}`);
+      console.log(`Tentativa ${attempt}: ${url.substring(0, 100)}...`);
       
       const response = await fetch(url, { 
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(8000),
         headers: { 
           'Accept': 'application/json',
           'User-Agent': 'Mozilla/5.0 (compatible; PNCP-Client/1.0)'
@@ -173,7 +184,7 @@ const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> 
         const responseBody = await response.text();
         if (responseBody) {
           const data = JSON.parse(responseBody);
-          console.log(`✅ ${data?.data?.length || 0} registros retornados (Total: ${data?.totalRegistros || 0})`);
+          console.log(`✅ ${data?.data?.length || 0} registros retornados`);
           return data;
         }
       } else if (response.status === 204) {
@@ -185,8 +196,7 @@ const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> 
         await delay(waitTime);
         continue;
       } else {
-        const errorBody = await response.text();
-        console.error(`❌ Erro HTTP ${response.status}: ${errorBody}`);
+        console.error(`❌ Erro HTTP ${response.status}`);
       }
       
     } catch (error: any) {
@@ -199,22 +209,34 @@ const fetchWithRetry = async (url: string, retries = MAX_RETRIES): Promise<any> 
   return null;
 };
 
-// ===================================================================
-// BUSCA CORRIGIDA - SEM MODALIDADE QUANDO FILTRAR POR LOCALIZAÇÃO
-// ===================================================================
+const fetchPageForModality = async (modalityCode: string, page: number, baseParams: URLSearchParams) => {
+  const params = new URLSearchParams(baseParams);
+  params.set('pagina', String(page));
+  params.append('codigoModalidadeContratacao', modalityCode);
+  
+  const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
+  
+  await delay(DELAY_BETWEEN_REQUESTS);
+  return await fetchWithRetry(url);
+};
+
+// Buscar na API PNCP - SEMPRE busca todas as modalidades
 const searchInPNCP = async (uf?: string, city?: string, keyword?: string) => {
   console.log('🌐 Buscando na API PNCP...');
   
+  // SEMPRE buscar todas as modalidades - filtro será no frontend
+  const modalityCodes = ALL_MODALITY_CODES;
+  console.log(`🎯 Buscando todas as modalidades: ${modalityCodes.join(', ')}`);
+
+  // Parâmetros base - CORREÇÃO: Remover filtro de data inicial para pegar mais resultados
   const baseParams = new URLSearchParams();
   const today = new Date();
   const futureDate = new Date();
-  futureDate.setDate(today.getDate() + 90); // Próximos 90 dias para pegar mais licitações
+  futureDate.setDate(today.getDate() + 60);
   
-  // CORREÇÃO PRINCIPAL: Apenas dataFinal para endpoint /proposta
+  // Apenas data final, sem data inicial para capturar mais licitações
   baseParams.append('dataFinal', formatDateToYYYYMMDD(futureDate));
-  baseParams.append('tamanhoPagina', String(MAX_PAGE_SIZE));
 
-  // FILTROS GEOGRÁFICOS (como no exemplo que funciona)
   if (city && city !== 'all') {
     baseParams.append('codigoMunicipioIbge', city);
   } else if (uf && uf !== 'all') {
@@ -222,48 +244,37 @@ const searchInPNCP = async (uf?: string, city?: string, keyword?: string) => {
   }
 
   let allBids: any[] = [];
-  let page = 1;
-  let hasMorePages = true;
-
-  // Buscar múltiplas páginas
-  while (hasMorePages && page <= 10) { // Limite de 10 páginas para segurança
-    const params = new URLSearchParams(baseParams);
-    params.append('pagina', String(page));
-    
-    const url = `${PNCP_API_BASE_URL}?${params.toString()}`;
-    
-    await delay(DELAY_BETWEEN_REQUESTS);
-    const data = await fetchWithRetry(url);
-    
-    if (data && data.data && data.data.length > 0) {
-      allBids.push(...data.data);
-      console.log(`📄 Página ${page}: ${data.data.length} registros`);
+  
+  // Buscar por modalidade
+  for (const modalityCode of modalityCodes) {
+    try {
+      const data = await fetchPageForModality(modalityCode, 1, baseParams);
       
-      // Verificar se há mais páginas
-      hasMorePages = page < (data.totalPaginas || 1);
-      page++;
-    } else {
-      hasMorePages = false;
+      if (data && data.data) {
+        allBids.push(...data.data);
+        
+        // Se tem palavra-chave, buscar mais páginas
+        if (keyword && keyword.trim() !== '' && data.totalPaginas > 1) {
+          const maxPages = Math.min(data.totalPaginas, 5);
+          for (let page = 2; page <= maxPages; page++) {
+            const pageData = await fetchPageForModality(modalityCode, page, baseParams);
+            if (pageData && pageData.data) {
+              allBids.push(...pageData.data);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`❌ Erro modalidade ${modalityCode}:`, error);
     }
   }
 
-  console.log(`📡 PNCP: ${allBids.length} licitações coletadas no total`);
-  
-  // FILTRAR POR PALAVRA-CHAVE NO FRONTEND SE NECESSÁRIO
-  if (keyword && keyword.trim() !== '') {
-    const filtered = allBids.filter(bid => 
-      bid.objetoCompra?.toLowerCase().includes(keyword.toLowerCase()) ||
-      bid.orgaoEntidade?.razaoSocial?.toLowerCase().includes(keyword.toLowerCase())
-    );
-    console.log(`🔍 Filtrado por palavra-chave "${keyword}": ${filtered.length} resultados`);
-    return filtered;
-  }
-  
+  console.log(`📡 PNCP: ${allBids.length} licitações coletadas`);
   return allBids;
 };
 
 // ===================================================================
-// HANDLER PRINCIPAL
+// HANDLER PRINCIPAL - SEM FILTRO DE MODALIDADE
 // ===================================================================
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -280,11 +291,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`🚀 Busca híbrida: UF=${uf}, City=${city}, Keyword=${keyword}, Page=${pageNum}`);
 
-    // Buscar no Supabase primeiro
+    // ===================================================================
+    // CORREÇÃO: Só buscar dados novos na primeira página
+    // ===================================================================
     let supabaseResults = await searchInSupabase(uf as string, city as string, keyword as string);
 
-    // Só buscar no PNCP se for primeira página E tiver poucos resultados
-    if (pageNum === 1 && supabaseResults.length < 20) {
+    // OTIMIZAÇÃO: Só buscar no PNCP se for página 1 E se tiver poucos resultados
+    if (pageNum === 1 && supabaseResults.length < 10) {
       console.log('🔄 Primeira página com poucos dados - buscando no PNCP...');
       const pncpResults = await searchInPNCP(uf as string, city as string, keyword as string);
       
@@ -298,15 +311,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // ===================================================================
+    // ETAPA 3: PROCESSAR E PAGINAR RESULTADOS
+    // ===================================================================
+    let allResults = supabaseResults;
+    
     // Remover duplicatas baseado no id_pncp
-    const uniqueResults = supabaseResults.filter((item, index, self) => 
+    const uniqueResults = allResults.filter((item, index, self) => 
       index === self.findIndex(t => t.id_pncp === item.id_pncp)
     );
 
     // Ordenar por data de publicação (mais recente primeiro)
     uniqueResults.sort((a, b) => new Date(b.data_publicacao).getTime() - new Date(a.data_publicacao).getTime());
 
-    // Paginação
+    // CORREÇÃO: Paginação sem buscar dados novos
     const itemsPerPage = 10;
     const totalPages = Math.ceil(uniqueResults.length / itemsPerPage);
     const startIndex = (pageNum - 1) * itemsPerPage;
@@ -322,11 +340,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       hasNextPage: pageNum < totalPages,
       hasPrevPage: pageNum > 1,
       source: pageNum === 1 ? 'hybrid' : 'supabase-only',
-      warning: pageNum > 1 ? 'Dados da sessão anterior' : null,
-      debug: {
-        endpoint: 'contratacoes/proposta',
-        method: 'geographic_filter_without_modality'
-      }
+      warning: pageNum > 1 ? 'Dados da sessão anterior' : null
     });
 
   } catch (error: any) {
